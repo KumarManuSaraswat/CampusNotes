@@ -1,4 +1,4 @@
-import type { ApiResponse } from '@campusnotes/shared';
+import type { ApiResponse, NoteDto } from '@campusnotes/shared';
 export const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(
   /\/$/,
   '',
@@ -46,13 +46,21 @@ export const json = (method: string, body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 export const fileUrl = (path: string) => API_BASE + path;
-export function uploadNote(form: FormData, onProgress: (value: number) => void): Promise<any> {
+export function uploadNote(
+  form: FormData,
+  onProgress: (value: number) => void,
+): Promise<NoteDto[]> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', API_BASE + '/notes');
     xhr.withCredentials = true;
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onabort = () => {
+      const error = new Error('Upload was aborted.');
+      error.name = 'AbortError';
+      reject(error);
     };
     xhr.onload = () => {
       try {
@@ -65,7 +73,17 @@ export function uploadNote(form: FormData, onProgress: (value: number) => void):
               xhr.status,
             ),
           );
-        else resolve(body.data);
+        else if (
+          !Array.isArray(body.data) ||
+          !body.data.every(
+            (note: unknown) =>
+              note !== null &&
+              typeof note === 'object' &&
+              typeof (note as { id?: unknown }).id === 'string',
+          )
+        )
+          reject(new ApiError('UPLOAD_FAILED', 'Unexpected upload response.', xhr.status));
+        else resolve(body.data as NoteDto[]);
       } catch {
         reject(new ApiError('UPLOAD_FAILED', 'Unexpected upload response.', xhr.status));
       }

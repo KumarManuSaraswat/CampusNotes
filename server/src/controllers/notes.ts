@@ -9,12 +9,12 @@ import { Vote } from '../models/Vote.js';
 import { Report } from '../models/Report.js';
 import { NoteRequest } from '../models/NoteRequest.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
-import { storage } from '../services/storage/cloudinary.js';
+import { storage, type StoredFile } from '../services/storage/cloudinary.js';
 import { HttpError, ok, wrap } from '../utils/http.js';
 import { readEnv } from '../config/env.js';
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: readEnv().MAX_FILE_MB * 1024 * 1024, files: 1 },
+  limits: { fileSize: readEnv().MAX_FILE_MB * 1024 * 1024, files: 10 },
 });
 const allowed = new Set(['application/pdf', 'image/jpeg', 'image/png']);
 const validPdfMarkers = (buffer: Buffer) =>
@@ -104,62 +104,106 @@ export function noteRoutes(router: Router) {
   router.post(
     '/notes',
     requireAuth,
-    upload.single('file'),
+    upload.array('files', 10),
     wrap(async (req, res) => {
-      if (!req.file) throw new HttpError(400, 'FILE_REQUIRED', 'Choose a PDF, JPG, or PNG file.');
-      const detected = await fileTypeFromBuffer(req.file.buffer);
-      const extension = req.file.originalname.toLowerCase().match(/\.[^.]+$/)?.[0];
-      const validExtension =
-        detected?.mime === 'application/pdf'
-          ? extension === '.pdf'
-          : detected?.mime === 'image/png'
-            ? extension === '.png'
-            : extension === '.jpg' || extension === '.jpeg';
-      const declaredTypeAllowed =
-        !req.file.mimetype ||
-        req.file.mimetype === 'application/octet-stream' ||
-        detected?.mime === req.file.mimetype;
-      if (
-        !detected ||
-        !allowed.has(detected.mime) ||
-        !declaredTypeAllowed ||
-        !validExtension ||
-        (detected.mime === 'application/pdf' && !validPdfMarkers(req.file.buffer))
-      )
-        throw new HttpError(
-          400,
-          'INVALID_FILE',
-          'The file content and extension must be a PDF, JPG, or PNG.',
-        );
+      const files = Array.isArray(req.files) ? req.files : [];
+      if (files.length === 0)
+        throw new HttpError(400, 'FILE_REQUIRED', 'Choose at least one PDF, JPG, or PNG file.');
+
       const data = metadataInput(req.body);
-      const originalFilename = fileName(req.file.originalname);
-      let stored;
-      try {
-        stored = await storage.upload(req.file.buffer, detected.mime);
-      } catch {
-        throw new HttpError(503, 'STORAGE_ERROR', 'Upload failed. Please retry in a moment.');
+      const validated: Array<{ file: Express.Multer.File; mime: string }> = [];
+      for (const file of files) {
+        const detected = await fileTypeFromBuffer(file.buffer);
+        const extension = file.originalname.toLowerCase().match(/\.[^.]+$/)?.[0];
+        const validExtension =
+          detected?.mime === 'application/pdf'
+            ? extension === '.pdf'
+            : detected?.mime === 'image/png'
+              ? extension === '.png'
+              : extension === '.jpg' || extension === '.jpeg';
+        const declaredTypeAllowed =
+          !file.mimetype ||
+          file.mimetype === 'application/octet-stream' ||
+          detected?.mime === file.mimetype;
+        if (
+          !detected ||
+          !allowed.has(detected.mime) ||
+          !declaredTypeAllowed ||
+          !validExtension ||
+          (detected.mime === 'application/pdf' && !validPdfMarkers(file.buffer))
+        )
+          throw new HttpError(
+            400,
+            'INVALID_FILE',
+            'The file content and extension must be a PDF, JPG, or PNG.',
+          );
+        validated.push({ file, mime: detected.mime });
       }
+
+      const storedFiles: StoredFile[] = [];
+      const createdNotes: Array<Awaited<ReturnType<typeof Note.create>>[number]> = [];
       try {
-        const note = await Note.create({
-          ...data,
-          title: data.title || readable(originalFilename),
-          originalFilename,
-          fileType: detected.mime,
-          fileSize: req.file.size,
-          ...stored,
-          uploadedBy: req.actor!.id,
-          metadataSource: Object.values(data).some((x) => (Array.isArray(x) ? x.length : !!x))
-            ? 'manual'
-            : 'filename',
-        });
-        await note.populate('uploadedBy', 'name');
-        ok(res, await dto(note, req.actor!.id), 'Note uploaded.', 201);
+        for (const { file, mime } of validated) {
+          let stored;
+          try {
+            stored = await storage.upload(file.buffer, mime);
+          } catch {
+            throw new HttpError(503, 'STORAGE_ERROR', 'Upload failed. Please retry in a moment.');
+          }
+          storedFiles.push(stored);
+          const originalFilename = fileName(file.originalname);
+          const note = await Note.create({
+            ...data,
+            title: data.title || readable(originalFilename),
+            originalFilename,
+            fileType: mime,
+            fileSize: file.size,
+            ...stored,
+            uploadedBy: req.actor!.id,
+            metadataSource: Object.values(data).some((x) => (Array.isArray(x) ? x.length : !!x))
+              ? 'manual'
+              : 'filename',
+          });
+          createdNotes.push(note);
+          await note.populate('uploadedBy', 'name');
+        }
       } catch (error) {
-        await storage.remove(stored).catch(() => {
-          console.error('Storage cleanup failed after note persistence failed.');
+        const noteIds = createdNotes.map((note) => note._id);
+        console.error('Batch note upload failed; starting cleanup.', {
+          fileCount: validated.length,
+          createdNoteCount: createdNotes.length,
+          error,
         });
+
+        if (noteIds.length > 0) {
+          try {
+            await Note.deleteMany({ _id: { $in: noteIds } });
+          } catch (cleanupError) {
+            console.error('Batch MongoDB note cleanup failed.', {
+              noteIds,
+              error: cleanupError,
+            });
+          }
+        }
+
+        const cleanupResults = await Promise.allSettled(
+          storedFiles.map((stored) => storage.remove(stored)),
+        );
+        cleanupResults.forEach((result, index) => {
+          if (result.status === 'rejected')
+            console.error('Batch Cloudinary cleanup failed.', {
+              storagePublicId: storedFiles[index].storagePublicId,
+              error: result.reason,
+            });
+        });
+
         throw error;
       }
+
+      const response = await Promise.all(
+        createdNotes.map((note) => dto(note, req.actor!.id)),
+      );
+      ok(res, response, 'Notes uploaded.', 201);
     }),
   );
   router.get(
