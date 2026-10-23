@@ -8,6 +8,7 @@ import { storage } from '../storage/cloudinary.js';
 import { prepareDocument, type DocumentMimeType } from './document/prepareDocument.js';
 import { extractVisualText } from './vision/visionAnalyzer.js';
 import { assessStudyContent, studyAssessmentSchema } from './classification/studyGate.js';
+import { suggestMetadata } from './suggestMetadata.js';
 import { analysisFailure, type AnalysisStage } from './analysisFailure.js';
 
 const activeActors = new Set<string>();
@@ -21,6 +22,7 @@ export function gateDto(note: any): StudyGateResult {
     processingStatus: note.processingStatus,
     studyGateStatus: note.studyGateStatus || 'legacy_unreviewed',
     assessment: note.studyAssessment ?? null,
+    processingStage: note.processingStage || undefined,
     reviewRequestedAt: note.reviewRequestedAt?.toISOString() ?? null,
     reviewMessage: note.reviewMessage || '',
     processingError: note.studyGateStatus === 'failed' ? (note.processingError ?? null) : null,
@@ -54,6 +56,7 @@ export async function studyNoteStatus(noteId: string, actorId: string) {
 /** Synchronous request lifecycle: every attempt is claimed, awaited and persisted before returning. */
 export async function processStudyNote(noteId: string, actorId: string) {
   const original = await ownedNote(noteId, actorId);
+  if (original.assets?.length) return processGroupedStudyNote(noteId, actorId);
   if (original.studyGateStatus === 'approved') return gateDto(original);
   if (!aiAvailable())
     throw new HttpError(
@@ -193,6 +196,212 @@ export async function processStudyNote(noteId: string, actorId: string) {
           'This analysis was superseded. Refresh the document status.',
         );
       return gateDto(saved);
+    }
+  } finally {
+    activeActors.delete(actorId);
+  }
+}
+
+/** A browser call completes one durable stage. Completed asset readings survive retries. */
+async function processGroupedStudyNote(noteId: string, actorId: string) {
+  const initial = await ownedNote(noteId, actorId);
+  if (
+    initial.reviewedBy ||
+    (initial.processingStatus === 'completed' &&
+      (initial.studyGateStatus !== 'approved' || initial.aiMetadata))
+  )
+    return gateDto(initial);
+  if (!aiAvailable())
+    throw new HttpError(
+      503,
+      'AI_NOT_CONFIGURED',
+      'Analysis is unavailable. Your draft is retained.',
+    );
+  if (activeActors.has(actorId) || activeActors.size >= readEnv().AI_MAX_CONCURRENT)
+    throw new HttpError(429, 'AI_BUSY', 'Analysis is busy. Please retry shortly.');
+  activeActors.add(actorId);
+  const attemptId = randomUUID();
+  try {
+    const note = await Note.findOneAndUpdate(
+      {
+        _id: noteId,
+        uploadedBy: actorId,
+        publicationStatus: 'draft',
+        reviewRequestedAt: null,
+        $or: [{ studyGateAttemptId: null }, { studyGateExpiresAt: { $lte: new Date() } }],
+      },
+      {
+        $set: {
+          studyGateAttemptId: attemptId,
+          studyGateExpiresAt: new Date(Date.now() + 90_000),
+          processingStatus: 'pending',
+          processingError: null,
+        },
+      },
+      { new: true },
+    );
+    if (!note)
+      throw new HttpError(409, 'ANALYSIS_IN_PROGRESS', 'Refresh before retrying analysis.');
+    const guard = {
+      _id: noteId,
+      studyGateAttemptId: attemptId,
+      studyGateInputVersion: note.studyGateInputVersion,
+    };
+    const event = (step: string, status: string, message: string) => ({
+      step,
+      status,
+      at: new Date(),
+      message,
+    });
+    const save = async (update: Record<string, unknown>, options: Record<string, unknown> = {}) => {
+      const saved = await Note.findOneAndUpdate(guard, update, { new: true, ...options });
+      if (!saved)
+        throw new HttpError(409, 'STALE_ATTEMPT', 'This analysis was superseded. Refresh.');
+      return gateDto(saved);
+    };
+    try {
+      const asset = note.assets!.find((item) => item.extractionStatus !== 'completed');
+      if (asset) {
+        const bytes = await storage.read(
+          {
+            storageProvider: 'cloudinary',
+            storagePublicId: asset.storagePublicId,
+            storageResourceType: asset.storageResourceType,
+          },
+          asset.mimeType,
+        );
+        const mimeType = asset.mimeType as DocumentMimeType;
+        const prepared = await prepareDocument(
+          { bytes, mimeType },
+          { maxPages: 40, timeoutMs: 10_000 },
+        );
+        const usedVision = prepared.status === 'vision_required';
+        const extracted = usedVision
+          ? await extractVisualText({ bytes, mimeType }, { timeoutMs: 15_000 })
+          : { text: prepared.text, warnings: prepared.warnings };
+        return save(
+          {
+            $set: {
+              'assets.$[asset].extractionStatus': 'completed',
+              'assets.$[asset].extractedText': extracted.text,
+              'assets.$[asset].extractionWarnings': extracted.warnings,
+              'assets.$[asset].usedVision': usedVision,
+              processingStage: 'document_extraction',
+              studyGateStatus: 'pending',
+              studyGateAttemptId: null,
+              studyGateExpiresAt: null,
+            },
+            $push: {
+              processingEvents: event(
+                'document_extraction',
+                'completed',
+                `${asset.originalFilename} was read${usedVision ? ' with vision' : ''}.`,
+              ),
+            },
+          },
+          { arrayFilters: [{ 'asset.id': asset.id }] },
+        );
+      }
+      const source = note
+        .assets!.map(
+          (item) => `[File ${item.uploadIndex + 1}, ${item.id}]\n${item.extractedText || ''}`,
+        )
+        .join('\n\n');
+      if (note.studyGateStatus !== 'approved') {
+        const warnings = note.assets!.flatMap((item) => item.extractionWarnings);
+        const assessment = studyAssessmentSchema.parse(
+          warnings.length
+            ? {
+                decision: 'review',
+                category: null,
+                subject: null,
+                tags: [],
+                evidence: [],
+                reason: 'Some content could not be read reliably. A human review is needed.',
+                warnings: warnings.slice(0, 6).map((item) => item.slice(0, 240)),
+              }
+            : await assessStudyContent({ extractedText: source }),
+        );
+        const gate = { academic: 'approved', non_academic: 'rejected', review: 'needs_review' }[
+          assessment.decision
+        ];
+        return save({
+          $set: {
+            studyAssessment: assessment,
+            studyGateStatus: gate,
+            processingStatus: gate === 'approved' ? 'pending' : 'completed',
+            processingStage: gate === 'approved' ? 'metadata' : 'ready_for_review',
+            studyGateReviewedAt: new Date(),
+            studyGateAttemptId: null,
+            studyGateExpiresAt: null,
+            lastProcessedAt: new Date(),
+          },
+          $push: { processingEvents: event('study_screening', 'completed', assessment.reason) },
+        });
+      }
+      if (!note.aiMetadata) {
+        try {
+          const metadata = await suggestMetadata(source, note.studyAssessment);
+          return save({
+            $set: {
+              aiMetadata: metadata,
+              processingStatus: 'completed',
+              processingStage: 'ready_for_review',
+              studyGateAttemptId: null,
+              studyGateExpiresAt: null,
+              lastProcessedAt: new Date(),
+            },
+            $push: {
+              processingEvents: event(
+                'metadata',
+                'completed',
+                'Metadata suggestions are ready for review.',
+              ),
+            },
+          });
+        } catch {
+          return save({
+            $set: {
+              processingStatus: 'completed',
+              processingStage: 'ready_for_review',
+              studyGateAttemptId: null,
+              studyGateExpiresAt: null,
+              lastProcessedAt: new Date(),
+            },
+            $push: {
+              processingEvents: event(
+                'metadata',
+                'failed',
+                'Metadata suggestions were unavailable; enter details manually.',
+              ),
+            },
+          });
+        }
+      }
+      return save({
+        $set: {
+          processingStatus: 'completed',
+          processingStage: 'ready_for_review',
+          studyGateAttemptId: null,
+          studyGateExpiresAt: null,
+        },
+      });
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      return save({
+        $set: {
+          processingStatus: 'failed',
+          studyGateStatus: 'failed',
+          processingStage: 'document_extraction',
+          processingError: 'Analysis could not finish. Your originals are retained.',
+          studyGateAttemptId: null,
+          studyGateExpiresAt: null,
+          lastProcessedAt: new Date(),
+        },
+        $push: {
+          processingEvents: event('analysis', 'failed', 'Analysis failed; retry is available.'),
+        },
+      });
     }
   } finally {
     activeActors.delete(actorId);

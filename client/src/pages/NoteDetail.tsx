@@ -34,6 +34,10 @@ export function NoteDetail() {
   const [showReport, setShowReport] = useState(false);
   const [reason, setReason] = useState('spam');
   const [description, setDescription] = useState('');
+  const [matches, setMatches] = useState<
+    Array<{ id: string; title: string; subject: string; reason: string }>
+  >([]);
+  const [requestMatch, setRequestMatch] = useState<string | null>(null);
   const { user } = useAuth();
   const toast = useToast();
   useEffect(() => {
@@ -55,6 +59,29 @@ export function NoteDetail() {
       active = false;
     };
   }, [id, user?.id]);
+  useEffect(() => {
+    if (!note || !user || user.id !== note.uploadedBy.id || note.publicationStatus === 'draft')
+      return;
+    api<Array<{ id: string; title: string; subject: string; reason: string }>>(
+      `/notes/${note.id}/matching-requests`,
+    )
+      .then(setMatches)
+      .catch(() => setMatches([]));
+  }, [note?.id, note?.publicationStatus, user?.id]);
+  async function fulfillMatch(requestId: string) {
+    if (!note || requestMatch !== requestId) return;
+    setBusy(true);
+    try {
+      await api(`/requests/${requestId}/fulfill`, json('PATCH', { noteId: note.id }));
+      setMatches((current) => current.filter((item) => item.id !== requestId));
+      setRequestMatch(null);
+      toast('Request fulfilled with this note.');
+    } catch (failure) {
+      toast((failure as Error).message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
   async function downloadOriginal() {
     if (!note) return;
     setDownloading(true);
@@ -138,9 +165,26 @@ export function NoteDetail() {
       </Link>
       <div className="detail-grid">
         <div>
-          {user?.id === note.uploadedBy.id && <StudyGateControls note={note} onChange={setNote} />}
+          {user?.id === note.uploadedBy.id && !note.assets?.length && (
+            <StudyGateControls note={note} onChange={setNote} />
+          )}
+          {user?.id === note.uploadedBy.id &&
+            !!note.assets?.length &&
+            note.publicationStatus === 'draft' && (
+              <div className="soft-banner">
+                <strong>This note is private.</strong>{' '}
+                <Link to={`/notes/${note.id}/review`}>Review and publish →</Link>
+              </div>
+            )}
           <div className="detail-heading">
             <span className="pill">{note.subject || 'Uncategorized'}</span>
+            {note.aiPageOrder &&
+              note.orderConfirmedAt &&
+              !!note.assets?.length &&
+              note.assets.every(
+                (asset) =>
+                  asset.confirmedPosition === note.aiPageOrder!.orderedAssetIds.indexOf(asset.id),
+              ) && <span className="pill">AI order reviewed by uploader</span>}
             <h1>{note.title}</h1>
             <p>{note.description || 'No description added yet.'}</p>
             <div className="byline">
@@ -151,14 +195,58 @@ export function NoteDetail() {
           <div className="surface preview-panel">
             <div className="preview-head">
               <span>
-                <FileText size={19} /> Original document
+                <FileText size={19} /> Original{' '}
+                {note.assets?.length && note.assets.length > 1 ? 'pages' : 'document'}
               </span>
               <button className="button small" disabled={downloading} onClick={downloadOriginal}>
-                <Download size={16} /> {downloading ? 'Preparing…' : 'Download'}
+                <Download size={16} />{' '}
+                {downloading
+                  ? 'Preparing…'
+                  : note.assets?.length && note.assets.length > 1
+                    ? 'Download first page'
+                    : 'Download'}
               </button>
             </div>
-            <OriginalPreview note={note} />
+            {note.assets && note.assets.length > 1 ? (
+              note.assets
+                .slice()
+                .sort(
+                  (a, b) =>
+                    (a.confirmedPosition ?? a.uploadIndex) - (b.confirmedPosition ?? b.uploadIndex),
+                )
+                .map((asset, index) => (
+                  <div key={asset.id} className="detail-asset">
+                    <h3>
+                      Page {index + 1}: {asset.originalFilename}
+                    </h3>
+                    <OriginalPreview
+                      note={{
+                        ...note,
+                        id: note.id + asset.id,
+                        fileType: asset.mimeType,
+                        previewUrl: asset.previewUrl,
+                        downloadUrl: asset.downloadUrl,
+                      }}
+                    />
+                    <a href={API_BASE + asset.downloadUrl}>Download this page</a>
+                  </div>
+                ))
+            ) : (
+              <OriginalPreview note={note} />
+            )}
           </div>
+          {note.studySummary && (
+            <div className="surface preview-panel">
+              <h2>Study summary</h2>
+              <p>{note.studySummary}</p>
+            </div>
+          )}
+          {note.generatedPdfUrl && (
+            <div className="surface preview-panel">
+              <h2>Combined PDF</h2>
+              <a href={API_BASE + note.generatedPdfUrl}>Download organized PDF</a>
+            </div>
+          )}
         </div>
         <aside>
           <div className="surface side-panel">
@@ -226,6 +314,32 @@ export function NoteDetail() {
               <p className="hint">You cannot vote on your own notes.</p>
             )}
           </div>
+          {user?.id === note.uploadedBy.id && matches.length > 0 && (
+            <div className="surface side-panel">
+              <h2>Matching open requests</h2>
+              {matches.map((match) => (
+                <div key={match.id} className="request-match">
+                  <strong>{match.title}</strong>
+                  <p>{match.reason}</p>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={requestMatch === match.id}
+                      onChange={(event) => setRequestMatch(event.target.checked ? match.id : null)}
+                    />{' '}
+                    This note matches the request
+                  </label>
+                  <button
+                    className="button small"
+                    disabled={busy || requestMatch !== match.id}
+                    onClick={() => void fulfillMatch(match.id)}
+                  >
+                    Fulfill request
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           {user?.id === note.uploadedBy.id && (
             <div className="surface side-panel">
               <h2>Manage this note</h2>

@@ -19,6 +19,7 @@ export function Requests() {
   const [myNotes, setMyNotes] = useState<NoteDto[]>([]);
   const [fulfillId, setFulfillId] = useState<string | null>(null);
   const [selectedNote, setSelectedNote] = useState('');
+  const [matchConfirmed, setMatchConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const { user } = useAuth();
@@ -40,7 +41,13 @@ export function Requests() {
   useEffect(() => {
     if (user)
       api<NoteDto[]>('/users/me/notes')
-        .then((notes) => setMyNotes(notes.filter((n) => n.studyGateStatus === 'approved')))
+        .then((notes) =>
+          setMyNotes(
+            notes.filter(
+              (n) => n.studyGateStatus === 'approved' && n.publicationStatus !== 'draft',
+            ),
+          ),
+        )
         .catch(() => {});
   }, [user?.id]);
   async function create(e: FormEvent) {
@@ -67,7 +74,7 @@ export function Requests() {
   }
   async function fulfill(e: FormEvent) {
     e.preventDefault();
-    if (!selectedNote || !fulfillId) return;
+    if (!selectedNote || !fulfillId || !matchConfirmed) return;
     setBusy(true);
     try {
       await api('/requests/' + fulfillId + '/fulfill', json('PATCH', { noteId: selectedNote }));
@@ -207,6 +214,7 @@ export function Requests() {
                   onClick={() => {
                     setFulfillId(item.id);
                     setSelectedNote('');
+                    setMatchConfirmed(false);
                   }}
                 >
                   Fulfill with my note
@@ -232,7 +240,21 @@ export function Requests() {
                   {!myNotes.length && (
                     <p className="hint">Upload notes first, then return to fulfill this request.</p>
                   )}
+                  <label className="field">
+                    <input
+                      type="checkbox"
+                      checked={matchConfirmed}
+                      onChange={(event) => setMatchConfirmed(event.target.checked)}
+                    />{' '}
+                    I confirm this note matches the request.
+                  </label>
                   <div className="form-actions">
+                    <Link
+                      className="secondary-button"
+                      to={`/upload?requestId=${encodeURIComponent(item.id)}`}
+                    >
+                      Upload a new note
+                    </Link>
                     <button
                       type="button"
                       className="secondary-button"
@@ -240,7 +262,10 @@ export function Requests() {
                     >
                       Cancel
                     </button>
-                    <button className="button small" disabled={busy || !selectedNote}>
+                    <button
+                      className="button small"
+                      disabled={busy || !selectedNote || !matchConfirmed}
+                    >
                       Fulfill request
                     </button>
                   </div>

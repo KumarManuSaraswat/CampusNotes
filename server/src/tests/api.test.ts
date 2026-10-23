@@ -6,11 +6,29 @@ import { Note } from '../models/Note.js';
 import { User } from '../models/User.js';
 import { Bookmark } from '../models/Bookmark.js';
 import jwt from 'jsonwebtoken';
-const { mockStorageRead, mockPrepare, mockVision, mockAssess } = vi.hoisted(() => ({
+import { PDFDocument } from 'pdf-lib';
+const {
+  mockStorageRead,
+  mockPrepare,
+  mockVision,
+  mockAssess,
+  mockSuggestMetadata,
+  mockSuggestSummary,
+  mockSuggestOrder,
+  mockGeneratedPdf,
+} = vi.hoisted(() => ({
   mockStorageRead: vi.fn(),
   mockPrepare: vi.fn(),
   mockVision: vi.fn(),
   mockAssess: vi.fn(),
+  mockSuggestMetadata: vi.fn(),
+  mockSuggestSummary: vi.fn(),
+  mockSuggestOrder: vi.fn(),
+  mockGeneratedPdf: { bytes: null as Buffer | null },
+}));
+const { mockStorageUploadHook, mockStorageRemove } = vi.hoisted(() => ({
+  mockStorageUploadHook: vi.fn(),
+  mockStorageRemove: vi.fn(),
 }));
 vi.mock('../services/ai/document/prepareDocument.js', () => ({ prepareDocument: mockPrepare }));
 vi.mock('../services/ai/vision/visionAnalyzer.js', () => ({ extractVisualText: mockVision }));
@@ -18,16 +36,31 @@ vi.mock('../services/ai/classification/studyGate.js', async (original) => ({
   ...(await original<typeof import('../services/ai/classification/studyGate.js')>()),
   assessStudyContent: mockAssess,
 }));
+vi.mock('../services/ai/suggestMetadata.js', () => ({ suggestMetadata: mockSuggestMetadata }));
+vi.mock('../services/ai/suggestSummary.js', () => ({ suggestSummary: mockSuggestSummary }));
+vi.mock('../services/ai/suggestPageOrder.js', () => ({ suggestPageOrder: mockSuggestOrder }));
 
 vi.mock('../services/storage/cloudinary.js', () => ({
   storage: {
-    upload: async (_buffer: Buffer, mime: string) => ({
-      storagePublicId: mime === 'application/pdf' ? 'fixture.pdf' : 'fixture',
-      storageResourceType: mime === 'application/pdf' ? 'raw' : 'image',
-      storageProvider: 'cloudinary',
-    }),
-    remove: async () => {},
-    read: (...args: unknown[]) => mockStorageRead(...args),
+    upload: async (buffer: Buffer, mime: string) => {
+      await mockStorageUploadHook(buffer, mime);
+      const generated = mime === 'application/pdf' && buffer.length > 100;
+      if (generated) mockGeneratedPdf.bytes = buffer;
+      return {
+        storagePublicId: generated
+          ? 'generated.pdf'
+          : mime === 'application/pdf'
+            ? 'fixture.pdf'
+            : 'fixture',
+        storageResourceType: mime === 'application/pdf' ? 'raw' : 'image',
+        storageProvider: 'cloudinary',
+      };
+    },
+    remove: (...args: unknown[]) => mockStorageRemove(...args),
+    read: (...args: unknown[]) =>
+      (args[0] as { storagePublicId?: string })?.storagePublicId === 'generated.pdf'
+        ? mockGeneratedPdf.bytes
+        : mockStorageRead(...args),
   },
 }));
 let mongo: MongoMemoryReplSet;
@@ -59,6 +92,40 @@ beforeAll(async () => {
   });
   mockVision.mockResolvedValue({ text: 'A lesson about eigenvectors.', warnings: [] });
   mockAssess.mockResolvedValue(academic);
+  mockSuggestMetadata.mockResolvedValue({
+    title: 'Linear algebra notes',
+    category: 'Mathematics',
+    subject: 'Linear algebra',
+    topics: ['eigenvectors'],
+    keywords: ['eigenvectors'],
+    documentType: 'lecture notes',
+    instructor: null,
+    lectureDate: null,
+    description: 'A lesson about eigenvectors.',
+    uncertaintyNotes: [],
+  });
+  mockSuggestOrder.mockImplementation(async (assets: Array<{ id: string }>) => ({
+    orderedAssetIds: assets.map((asset) => asset.id).reverse(),
+    reasons: [],
+    uncertainAssetIds: [],
+  }));
+  mockSuggestSummary.mockImplementation(async (assets: Array<{ id: string }>) => [
+    {
+      text: 'The lesson explains eigenvectors.',
+      sourceAssetId: assets[0].id,
+      excerpt: 'eigenvectors',
+    },
+    {
+      text: 'The notes discuss linear algebra.',
+      sourceAssetId: assets[0].id,
+      excerpt: 'eigenvectors',
+    },
+    {
+      text: 'The pages cover study examples.',
+      sourceAssetId: assets[0].id,
+      excerpt: 'eigenvectors',
+    },
+  ]);
   process.env.NODE_ENV = 'test';
   process.env.MONGODB_URI = uri;
   process.env.JWT_SECRET = 'test-secret-longer-than-thirty-two-characters';
@@ -86,6 +153,9 @@ afterAll(async () => {
   await mongo?.stop();
 });
 beforeEach(async () => {
+  mockGeneratedPdf.bytes = null;
+  mockStorageUploadHook.mockReset().mockResolvedValue(undefined);
+  mockStorageRemove.mockReset().mockResolvedValue(undefined);
   await Promise.all(
     Object.values(mongoose.connection.collections).map((collection) => collection.deleteMany({})),
   );
@@ -102,6 +172,42 @@ beforeEach(async () => {
   });
   mockVision.mockReset().mockResolvedValue({ text: 'A lesson about eigenvectors.', warnings: [] });
   mockAssess.mockReset().mockResolvedValue(academic);
+  mockSuggestMetadata
+    .mockReset()
+    .mockResolvedValue({
+      title: 'Linear algebra notes',
+      category: 'Mathematics',
+      subject: 'Linear algebra',
+      topics: ['eigenvectors'],
+      keywords: ['eigenvectors'],
+      documentType: 'lecture notes',
+      instructor: null,
+      lectureDate: null,
+      description: 'A lesson about eigenvectors.',
+      uncertaintyNotes: [],
+    });
+  mockSuggestOrder.mockReset().mockImplementation(async (assets: Array<{ id: string }>) => ({
+    orderedAssetIds: assets.map((asset) => asset.id).reverse(),
+    reasons: [],
+    uncertainAssetIds: [],
+  }));
+  mockSuggestSummary.mockReset().mockImplementation(async (assets: Array<{ id: string }>) => [
+    {
+      text: 'The lesson explains eigenvectors.',
+      sourceAssetId: assets[0].id,
+      excerpt: 'eigenvectors',
+    },
+    {
+      text: 'The notes discuss linear algebra.',
+      sourceAssetId: assets[0].id,
+      excerpt: 'eigenvectors',
+    },
+    {
+      text: 'The pages cover study examples.',
+      sourceAssetId: assets[0].id,
+      excerpt: 'eigenvectors',
+    },
+  ]);
 });
 const origin = (r: any) => r.set('Origin', 'http://localhost:5173');
 const png = Buffer.from(
@@ -478,8 +584,14 @@ describe('CampusNotes API', () => {
     expect((await request(app).get('/api/notes/' + noteId + '/file')).status).toBe(404);
     expect(
       (await origin(alice.post('/api/notes/' + noteId + '/ai-process'))).body.data.studyGateStatus,
+    ).toBe('pending');
+    expect(
+      (await origin(alice.post('/api/notes/' + noteId + '/ai-process'))).body.data.studyGateStatus,
     ).toBe('approved');
-    expect((await request(app).get('/api/notes?limit=5')).body.data.total).toBe(1);
+    expect(
+      (await origin(alice.post('/api/notes/' + noteId + '/ai-process'))).body.data.processingStatus,
+    ).toBe('completed');
+    expect((await request(app).get('/api/notes?limit=5')).body.data.total).toBe(0);
     expect(
       (await alice.get('/api/users/me/notes')).body.data.map((note: any) => note.id),
     ).toContain(uploaded.body.data[0].id);
@@ -493,6 +605,15 @@ describe('CampusNotes API', () => {
     });
     expect(corrected.body.data.subject).toBe('Mathematics');
     expect(corrected.body.data.title).toBe('linear algebra');
+    expect(
+      (
+        await origin(alice.post('/api/notes/' + noteId + '/publish')).send({
+          publishConfirmed: true,
+          sharingRightsConfirmed: true,
+          personalInfoChecked: true,
+        })
+      ).status,
+    ).toBe(200);
     expect(
       (await request(app).get('/api/notes?subject=Mathematics&tag=eigenvectors&instructor=Rao'))
         .body.data.total,
@@ -612,7 +733,16 @@ describe('CampusNotes API', () => {
       contentType: 'application/pdf',
     });
     expect(pdfUpload.status).toBe(201);
-    await origin(alice.post('/api/notes/' + pdfUpload.body.data[0].id + '/ai-process'));
+    for (let step = 0; step < 3; step++)
+      await origin(alice.post('/api/notes/' + pdfUpload.body.data[0].id + '/ai-process'));
+    await origin(alice.patch('/api/notes/' + pdfUpload.body.data[0].id)).send({
+      subject: 'Mathematics',
+    });
+    await origin(alice.post('/api/notes/' + pdfUpload.body.data[0].id + '/publish')).send({
+      publishConfirmed: true,
+      sharingRightsConfirmed: true,
+      personalInfoChecked: true,
+    });
     const pdfPreview = await request(app).get(`/api/notes/${pdfUpload.body.data[0].id}/file`);
     expect(pdfPreview.headers['content-type']).toContain('application/pdf');
     expect(Buffer.from(pdfPreview.body)).toEqual(pdf);
@@ -621,7 +751,16 @@ describe('CampusNotes API', () => {
       contentType: 'image/jpeg',
     });
     expect(jpgUpload.status).toBe(201);
-    await origin(alice.post('/api/notes/' + jpgUpload.body.data[0].id + '/ai-process'));
+    for (let step = 0; step < 3; step++)
+      await origin(alice.post('/api/notes/' + jpgUpload.body.data[0].id + '/ai-process'));
+    await origin(alice.patch('/api/notes/' + jpgUpload.body.data[0].id)).send({
+      subject: 'Mathematics',
+    });
+    await origin(alice.post('/api/notes/' + jpgUpload.body.data[0].id + '/publish')).send({
+      publishConfirmed: true,
+      sharingRightsConfirmed: true,
+      personalInfoChecked: true,
+    });
     const jpgDownload = await request(app).get(
       `/api/notes/${jpgUpload.body.data[0].id}/file?download=1`,
     );
@@ -650,5 +789,285 @@ describe('CampusNotes API', () => {
     expect((await request(app).get('/api/notes/' + expendable.body.data[0].id)).status).toBe(404);
     expect((await origin(alice.post('/api/auth/logout'))).status).toBe(200);
     expect((await alice.get('/api/auth/me')).status).toBe(401);
+  });
+});
+
+describe('Grouped smart notes', () => {
+  it('rejects mixed PDF/image groups before storage and cleans up partial storage failures', async () => {
+    const owner = await actor();
+    const mixed = await hit('post', '/notes', owner)
+      .attach('files', pdf, 'notes.pdf')
+      .attach('files', png, 'page.png');
+    expect(mixed.status).toBe(400);
+    expect(mixed.body.error.code).toBe('MIXED_FILES');
+    expect(mockStorageUploadHook).not.toHaveBeenCalled();
+    mockStorageUploadHook
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('cloudinary unavailable'));
+    const failed = await hit('post', '/notes', owner)
+      .attach('files', png, 'one.png')
+      .attach('files', png, 'two.png');
+    expect(failed.status).toBe(503);
+    expect(await Note.countDocuments({ uploadedBy: owner._id })).toBe(0);
+    expect(mockStorageRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries failed metadata without repeating completed document extraction or screening', async () => {
+    const owner = await actor();
+    const upload = await hit('post', '/notes', owner).attach('files', png, 'notes.png');
+    const noteId = upload.body.data[0].id;
+    await hit('post', `/notes/${noteId}/ai-process`, owner);
+    await hit('post', `/notes/${noteId}/ai-process`, owner);
+    mockSuggestMetadata.mockRejectedValueOnce(new Error('provider unavailable'));
+    const failed = await hit('post', `/notes/${noteId}/ai-process`, owner);
+    expect(failed.body.data.studyGateStatus).toBe('approved');
+    expect(failed.body.data.processingStatus).toBe('completed');
+    expect((await hit('get', `/notes/${noteId}`, owner)).body.data.aiMetadata).toBeNull();
+    const retried = await hit('post', `/notes/${noteId}/ai-process`, owner);
+    expect(retried.body.data.processingStatus).toBe('completed');
+    expect((await hit('get', `/notes/${noteId}`, owner)).body.data.aiMetadata.title).toBe(
+      'Linear algebra notes',
+    );
+    expect(mockPrepare).toHaveBeenCalledTimes(1);
+    expect(mockAssess).toHaveBeenCalledTimes(1);
+  });
+
+  it('suggests order without applying it, then generates and serves a verified PDF and editable summary', async () => {
+    const owner = await actor();
+    const upload = await hit('post', '/notes', owner)
+      .attach('files', png, 'first.png')
+      .attach('files', png, 'second.png');
+    expect(upload.status).toBe(201);
+    const noteId = upload.body.data[0].id;
+    const [first, second] = upload.body.data[0].assets;
+    for (let step = 0; step < 4; step++) await hit('post', `/notes/${noteId}/ai-process`, owner);
+    const suggested = await hit('post', `/notes/${noteId}/suggest-order`, owner);
+    expect(suggested.status).toBe(200);
+    expect(suggested.body.data.aiPageOrder.orderedAssetIds).toEqual([second.id, first.id]);
+    expect(suggested.body.data.assets.every((asset: any) => asset.confirmedPosition === null)).toBe(
+      true,
+    );
+    expect((await hit('post', `/notes/${noteId}/generate-pdf`, owner)).body.error.code).toBe(
+      'ORDER_REQUIRED',
+    );
+    const confirmed = await hit('post', `/notes/${noteId}/confirm-order`, owner).send({
+      orderedAssetIds: [second.id, first.id],
+    });
+    expect(confirmed.status).toBe(200);
+    const generated = await hit('post', `/notes/${noteId}/generate-pdf`, owner);
+    expect(generated.status).toBe(200);
+    expect(generated.body.data.generatedPdfUrl).toBe(`/notes/${noteId}/generated-pdf`);
+    const download = await hit('get', `/notes/${noteId}/generated-pdf`, owner);
+    expect(download.status).toBe(200);
+    expect(download.headers['content-type']).toContain('application/pdf');
+    expect((await PDFDocument.load(Buffer.from(download.body))).getPageCount()).toBe(2);
+    expect(
+      (
+        await hit('post', `/notes/${noteId}/confirm-order`, owner).send({
+          orderedAssetIds: [first.id, second.id],
+        })
+      ).body.error.code,
+    ).toBe('ORDER_LOCKED');
+    const summarized = await hit('post', `/notes/${noteId}/generate-summary`, owner);
+    expect(summarized.status).toBe(200);
+    expect(summarized.body.data.studySummary).toContain('eigenvectors');
+    expect(summarized.body.data.summarySources).toHaveLength(3);
+    const reviewed = await hit('patch', `/notes/${noteId}/review`, owner).send({
+      title: 'Linear algebra',
+      subject: 'Mathematics',
+      studySummary: 'My corrected summary.',
+    });
+    expect(reviewed.body.data.studySummary).toBe('My corrected summary.');
+    expect(
+      (await hit('post', `/notes/${noteId}/generate-summary`, owner)).body.data.studySummary,
+    ).toBe('My corrected summary.');
+    const report = await hit('get', `/notes/${noteId}/ai-report`, owner);
+    expect(report.body.data.pdfReady).toBe(true);
+    expect(report.body.data.summaryReady).toBe(true);
+    expect(
+      report.body.data.events.some(
+        (event: any) => event.step === 'page_order' && event.status === 'suggested',
+      ),
+    ).toBe(true);
+    expect(
+      (
+        await hit('post', `/notes/${noteId}/publish`, owner).send({
+          publishConfirmed: true,
+          sharingRightsConfirmed: true,
+          personalInfoChecked: true,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await hit('get', `/notes/${noteId}/generated-pdf`)).status).toBe(200);
+  });
+
+  it('keeps a multi-image upload private until processing, review, order confirmation and publication', async () => {
+    const owner = await actor(),
+      reader = await actor();
+    mockPrepare.mockResolvedValue({
+      status: 'vision_required',
+      text: null,
+      pageCount: null,
+      warnings: [],
+    });
+    const submissionKey = 'd08d3e32-d82e-4c72-918d-697d97370f72';
+    const upload = () =>
+      hit('post', '/notes', owner)
+        .field('submissionKey', submissionKey)
+        .attach('files', png, { filename: 'page-two.png', contentType: 'image/png' })
+        .attach('files', jpeg, { filename: 'page-one.jpg', contentType: 'image/jpeg' });
+    const first = await upload();
+    expect(first.status).toBe(201);
+    expect(first.body.data).toHaveLength(1);
+    const noteId = first.body.data[0].id;
+    const assets = first.body.data[0].assets;
+    expect(assets).toHaveLength(2);
+    expect((await upload()).body.data[0].id).toBe(noteId);
+    const conflicting = await hit('post', '/notes', owner)
+      .field('submissionKey', submissionKey)
+      .field('title', 'Different content')
+      .attach('files', png, { filename: 'page-two.png', contentType: 'image/png' })
+      .attach('files', jpeg, { filename: 'page-one.jpg', contentType: 'image/jpeg' });
+    expect(conflicting.body.error.code).toBe('SUBMISSION_CONFLICT');
+    expect(await Note.countDocuments({ uploadedBy: owner._id })).toBe(1);
+    expect((await hit('get', `/notes/${noteId}`, reader)).status).toBe(404);
+    expect((await hit('get', `/notes/${noteId}/assets/${assets[1].id}/file`, reader)).status).toBe(
+      404,
+    );
+
+    expect(
+      (await hit('post', `/notes/${noteId}/ai-process`, owner)).body.data.processingStatus,
+    ).toBe('pending');
+    expect(
+      (await hit('post', `/notes/${noteId}/ai-process`, owner)).body.data.processingStatus,
+    ).toBe('pending');
+    expect(
+      (await hit('post', `/notes/${noteId}/ai-process`, owner)).body.data.studyGateStatus,
+    ).toBe('approved');
+    expect(
+      (await hit('post', `/notes/${noteId}/ai-process`, owner)).body.data.processingStatus,
+    ).toBe('completed');
+    expect(mockVision).toHaveBeenCalledTimes(2);
+    expect((await hit('get', `/notes/${noteId}`, reader)).status).toBe(404);
+    expect(
+      (
+        await hit('post', `/notes/${noteId}/publish`, owner).send({
+          publishConfirmed: true,
+          sharingRightsConfirmed: true,
+          personalInfoChecked: true,
+          acknowledgeNoPdf: true,
+        })
+      ).body.error.code,
+    ).toBe('METADATA_REQUIRED');
+    expect(
+      (
+        await hit('post', `/notes/${noteId}/confirm-order`, owner).send({
+          orderedAssetIds: [assets[0].id, assets[0].id],
+        })
+      ).body.error.code,
+    ).toBe('INVALID_ORDER');
+    expect(
+      (
+        await hit('post', `/notes/${noteId}/confirm-order`, owner).send({
+          orderedAssetIds: [assets[1].id, assets[0].id],
+        })
+      ).status,
+    ).toBe(200);
+    const saved = await hit('patch', `/notes/${noteId}/review`, owner).send({
+      title: 'Java OOP notes',
+      subject: 'Computer Science',
+      tags: ['Java', 'OOP'],
+      description: 'Inheritance and classes',
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.data.aiMetadata.title).toBe('Linear algebra notes');
+    expect(
+      (
+        await hit('post', `/notes/${noteId}/publish`, owner).send({
+          publishConfirmed: true,
+          sharingRightsConfirmed: true,
+          personalInfoChecked: true,
+        })
+      ).body.error.code,
+    ).toBe('PDF_ACK_REQUIRED');
+    expect(
+      (
+        await hit('post', `/notes/${noteId}/publish`, owner).send({
+          publishConfirmed: true,
+          sharingRightsConfirmed: true,
+          personalInfoChecked: true,
+          acknowledgeNoPdf: true,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await hit('get', '/notes?q=Java')).body.data.total).toBe(1);
+    const page = await hit('get', `/notes/${noteId}/assets/${assets[1].id}/file`, reader);
+    expect(page.status).toBe(200);
+    expect(Buffer.from(page.body)).toEqual(jpeg);
+    const report = await hit('get', `/notes/${noteId}/ai-report`, owner);
+    expect(report.body.data.fileCount).toBe(2);
+    expect(report.body.data.pageOrderConfirmed).toBe(true);
+    expect(report.body.data.pdfReady).toBe(false);
+    expect((await hit('get', `/notes/${noteId}/ai-report`, reader)).status).toBe(403);
+
+    const wanted = await hit('post', '/requests', reader).send({
+      title: 'Java OOP',
+      subject: 'Computer Science',
+    });
+    expect(
+      (await hit('patch', `/requests/${wanted.body.data.id}/fulfill`, owner).send({ noteId }))
+        .status,
+    ).toBe(200);
+    expect(
+      (await hit('patch', `/requests/${wanted.body.data.id}/fulfill`, owner).send({ noteId }))
+        .status,
+    ).toBe(409);
+  });
+
+  it('holds a non-academic upload and an unreadable image out of public discovery', async () => {
+    const owner = await actor();
+    const receipt = await hit('post', '/notes', owner).attach('files', png, 'receipt.png');
+    mockAssess.mockResolvedValueOnce({
+      decision: 'non_academic',
+      category: null,
+      subject: null,
+      tags: [],
+      reason: 'A retail receipt.',
+      evidence: ['receipt'],
+      warnings: [],
+    });
+    await hit('post', `/notes/${receipt.body.data[0].id}/ai-process`, owner);
+    expect(
+      (await hit('post', `/notes/${receipt.body.data[0].id}/ai-process`, owner)).body.data
+        .studyGateStatus,
+    ).toBe('rejected');
+    expect((await hit('get', `/notes/${receipt.body.data[0].id}`)).status).toBe(404);
+    expect(
+      (
+        await hit('post', `/notes/${receipt.body.data[0].id}/publish`, owner).send({
+          publishConfirmed: true,
+          sharingRightsConfirmed: true,
+          personalInfoChecked: true,
+        })
+      ).body.error.code,
+    ).toBe('NOT_READY');
+
+    const unclear = await hit('post', '/notes', owner).attach('files', jpeg, 'unclear.jpg');
+    mockPrepare.mockResolvedValueOnce({
+      status: 'vision_required',
+      text: null,
+      pageCount: null,
+      warnings: [],
+    });
+    mockVision.mockResolvedValueOnce({
+      text: null,
+      warnings: ['No readable text could be extracted.'],
+    });
+    await hit('post', `/notes/${unclear.body.data[0].id}/ai-process`, owner);
+    expect(
+      (await hit('post', `/notes/${unclear.body.data[0].id}/ai-process`, owner)).body.data
+        .studyGateStatus,
+    ).toBe('needs_review');
+    expect((await hit('get', `/notes/${unclear.body.data[0].id}`)).status).toBe(404);
   });
 });

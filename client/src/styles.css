@@ -1441,3 +1441,14 @@ footer {
     justify-content: flex-end;
   }
 }
+.smart-review { max-width: 1050px; }
+.review-section { margin: 1.2rem 0; padding: 1.5rem; display: grid; gap: .8rem; }
+.review-section h2, .review-section p { margin: 0; }
+.review-section label { display: flex; align-items: flex-start; gap: .6rem; }
+.review-assets { display: grid; gap: .8rem; }
+.review-asset { display: flex; align-items: center; gap: 1rem; padding: .8rem; border: 1px solid var(--border, #dedce8); border-radius: 12px; }
+.review-asset > div:nth-child(2) { flex: 1; min-width: 0; }
+.review-thumbnail, .review-thumbnail-placeholder { width: 96px; height: 120px; object-fit: contain; border-radius: 8px; background: #f4f1fb; display: grid; place-items: center; }
+.review-order-actions { display: flex; flex-direction: column; gap: .4rem; }
+.detail-asset { margin-top: 1rem; border-top: 1px solid var(--border, #dedce8); padding-top: 1rem; }
+@media (max-width: 620px) { .review-asset { flex-wrap: wrap; } .review-order-actions { flex-direction: row; width: 100%; } }
