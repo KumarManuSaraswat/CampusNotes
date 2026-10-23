@@ -367,6 +367,17 @@ describe('Study gate integration and publication boundaries', () => {
         mockAssess.mockResolvedValueOnce({ decision: 'academic', reason: 'invalid' });
       const result = await hit('post', `/notes/${note.id}/ai-process`, owner);
       expect(result.body.data.studyGateStatus).toBe('failed');
+      expect(result.body.data.processingError).toContain(
+        stage === 'parser'
+          ? '[document/'
+          : stage === 'provider' || stage === 'schema'
+            ? '[classification/'
+            : '[storage/',
+      );
+      const refreshed = await hit('get', `/notes/${note.id}/ai-status`, owner);
+      expect(refreshed.body.data.processingError).toBe(result.body.data.processingError);
+      const detail = await hit('get', `/notes/${note.id}`, owner);
+      expect(detail.body.data.processingError).toBe(result.body.data.processingError);
       expect(JSON.stringify(result.body)).not.toContain('secret');
       expect((await Note.findById(note.id))?.storagePublicId).toBe('fixture');
       expect((await hit('get', `/notes/${note.id}/file`)).status).toBe(404);

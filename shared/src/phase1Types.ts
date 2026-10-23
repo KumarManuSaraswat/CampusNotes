@@ -37,4 +37,5 @@ export interface StudyGateResult {
   processingStage?: string;
   reviewRequestedAt?: string | null;
   reviewMessage?: string;
+  processingError?: string | null;
 }

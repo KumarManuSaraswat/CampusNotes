@@ -12,6 +12,7 @@ export function mergeGate(note: NoteDto, result: StudyGateResult): NoteDto {
     studyAssessment: result.assessment,
     reviewRequestedAt: result.reviewRequestedAt ?? null,
     reviewMessage: result.reviewMessage ?? '',
+    processingError: result.processingError ?? null,
   };
 }
 export function StudyGateControls({
@@ -98,6 +99,11 @@ export function StudyGateControls({
         <p className="review-message" role="status">
           {note.reviewRequestedAt ? 'Review requested: ' : 'Moderator feedback: '}
           {note.reviewMessage}
+        </p>
+      )}
+      {note.studyGateStatus === 'failed' && note.processingError && (
+        <p className="form-error" role="alert">
+          {note.processingError}
         </p>
       )}
       {error && (

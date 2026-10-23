@@ -84,6 +84,7 @@ export interface NoteDto {
   } | null;
   reviewRequestedAt: string | null;
   reviewMessage: string;
+  processingError?: string | null;
   metadataSource: MetadataSource;
   upvoteCount: number;
   downvoteCount: number;
