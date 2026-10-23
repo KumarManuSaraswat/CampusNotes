@@ -95,7 +95,7 @@ export const TRANSCRIPTION_INSTRUCTION = [
 // Keep base64 bytes + prompt below the Gemini GenerateContent 20 MiB inline request guidance.
 const MAX_INLINE_BYTES = 14 * 1024 * 1024;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
-const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_TIMEOUT_MS = 150_000;
 const RETRY_DELAY_MS = 200;
 const supportedMimeTypes = new Set<string>(['image/jpeg', 'image/png', 'application/pdf']);
 
@@ -123,14 +123,14 @@ function getConfiguration(env: NodeJS.ProcessEnv, options: VisionAnalyzerOptions
       1024;
   const timeoutMs =
     options.timeoutMs ??
-    getNumericSetting(env.VISION_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1000, 120_000);
+    getNumericSetting(env.VISION_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1000, 150_000);
   if (
     !Number.isSafeInteger(maxBytes) ||
     maxBytes < 1 ||
     maxBytes > MAX_INLINE_BYTES ||
     !Number.isSafeInteger(timeoutMs) ||
     timeoutMs < 1 ||
-    timeoutMs > 120_000
+    timeoutMs > 150_000
   )
     throw new VisionError('CONFIG_INVALID');
   return { apiKey, model, maxBytes, timeoutMs };

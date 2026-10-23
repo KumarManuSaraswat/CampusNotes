@@ -9,5 +9,6 @@ export const STUDY_GATE_SYSTEM_INSTRUCTION = [
   'Short valid study content is still academic. Do not use keywords as a blacklist. Do not use a filename or infer the decision from a title alone.',
   'For academic content, select one allowed broad category, a specific subject, and up to eight relevant topic tags. For non_academic or review, return null category and subject and an empty tags array.',
   'Evidence must be up to six short, exact phrases copied from the supplied text, without adding quotation marks. Keep the reason brief, factual, and grounded in that evidence.',
+  'Return exactly one JSON object with all keys: decision, category, subject, tags, reason, evidence, and warnings. Use an empty warnings array when there are no warnings. Use JSON null for category and subject when required; do not omit keys or add markdown fences.',
   'Do not invent instructors, dates, facts, or confidence scores. Return only the requested JSON object. Never summarize the document.',
 ].join(' ');

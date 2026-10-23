@@ -7,7 +7,11 @@ import { HttpError } from '../../utils/http.js';
 import { storage } from '../storage/cloudinary.js';
 import { prepareDocument, type DocumentMimeType } from './document/prepareDocument.js';
 import { extractVisualText } from './vision/visionAnalyzer.js';
-import { assessStudyContent, studyAssessmentSchema } from './classification/studyGate.js';
+import {
+  assessStudyContent,
+  StudyGateError,
+  studyAssessmentSchema,
+} from './classification/studyGate.js';
 import { analysisFailure, type AnalysisStage } from './analysisFailure.js';
 
 const activeActors = new Set<string>();
@@ -85,8 +89,8 @@ export async function processStudyNote(noteId: string, actorId: string) {
           studyAssessment: null,
           processingError: null,
           studyGateAttemptId: attemptId,
-          // Allows one vision retry at its 60s timeout plus classification and I/O time.
-          studyGateExpiresAt: new Date(Date.now() + 240_000),
+          // Allows two vision attempts at the 150s default plus classification and I/O time.
+          studyGateExpiresAt: new Date(Date.now() + 420_000),
           reviewMessage: '',
         },
         $inc: { studyGateInputVersion: 1 },
@@ -170,7 +174,12 @@ export async function processStudyNote(noteId: string, actorId: string) {
       if (error instanceof HttpError) throw error;
       const failure = analysisFailure(stage, error);
       // Never log provider messages, signed URLs, document content or credentials.
-      console.warn('Study analysis failed', { attemptId, stage, code: failure.code });
+      console.warn('Study analysis failed', {
+        attemptId,
+        stage,
+        code: failure.code,
+        detail: error instanceof StudyGateError ? error.diagnostic : undefined,
+      });
       const saved = await Note.findOneAndUpdate(
         attempt,
         {

@@ -42,14 +42,17 @@ const safeMessages: Record<StudyGateErrorCode, string> = {
 
 export class StudyGateError extends Error {
   readonly retryable: boolean;
+  /** Safe diagnostic label; never contains model output or document text. */
+  readonly diagnostic?: string;
 
   constructor(
     readonly code: StudyGateErrorCode,
-    options: { retryable?: boolean } = {},
+    options: { retryable?: boolean; diagnostic?: string } = {},
   ) {
     super(safeMessages[code]);
     this.name = 'StudyGateError';
     this.retryable = options.retryable ?? false;
+    this.diagnostic = options.diagnostic;
   }
 }
 
@@ -136,7 +139,7 @@ export function createGeminiStudyGateClient(
         contents: request.contents,
         config: {
           systemInstruction: request.systemInstruction,
-          maxOutputTokens: 1024,
+          maxOutputTokens: 2048,
           responseMimeType: 'application/json',
           responseSchema: createGeminiStudyAssessmentSchema(sdk.Type),
         },
@@ -247,11 +250,12 @@ function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 function modelResponseText(response: unknown): string {
-  if (!response || typeof response !== 'object') throw new StudyGateError('MALFORMED_RESPONSE');
+  if (!response || typeof response !== 'object')
+    throw new StudyGateError('MALFORMED_RESPONSE', { diagnostic: 'response_not_object' });
   const value = response as Record<string, unknown>;
   const candidates = value.candidates;
   if (candidates !== undefined && !Array.isArray(candidates))
-    throw new StudyGateError('MALFORMED_RESPONSE');
+    throw new StudyGateError('MALFORMED_RESPONSE', { diagnostic: 'candidates_not_array' });
 
   const candidate = Array.isArray(candidates) ? candidates[0] : undefined;
   const reason =
@@ -260,7 +264,8 @@ function modelResponseText(response: unknown): string {
       : '';
   if (['SAFETY', 'BLOCKLIST', 'PROHIBITED_CONTENT'].includes(reason))
     throw new StudyGateError('PROVIDER_BLOCKED');
-  if (reason === 'MAX_TOKENS') throw new StudyGateError('MALFORMED_RESPONSE');
+  if (reason === 'MAX_TOKENS')
+    throw new StudyGateError('MALFORMED_RESPONSE', { diagnostic: 'truncated_max_tokens' });
 
   let text = value.text;
   if (text === undefined && candidate && typeof candidate === 'object') {
@@ -270,8 +275,11 @@ function modelResponseText(response: unknown): string {
       ? content.parts.map((part) => (typeof part.text === 'string' ? part.text : '')).join('')
       : undefined;
   }
-  if (typeof text !== 'string' || !text.trim()) throw new StudyGateError('MALFORMED_RESPONSE');
-  return text.trim();
+  if (typeof text !== 'string' || !text.trim())
+    throw new StudyGateError('MALFORMED_RESPONSE', { diagnostic: 'empty_response_text' });
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return (fenced?.[1] ?? trimmed).trim();
 }
 
 function normalizedEvidence(value: string): string {
@@ -287,15 +295,20 @@ function validateModelOutput(json: string, sourceText: string): StudyAssessment 
   try {
     decoded = JSON.parse(json);
   } catch {
-    throw new StudyGateError('MALFORMED_RESPONSE');
+    throw new StudyGateError('MALFORMED_RESPONSE', { diagnostic: 'invalid_json' });
   }
 
   const parsed = studyAssessmentSchema.safeParse(decoded);
-  if (!parsed.success) throw new StudyGateError('MALFORMED_RESPONSE');
+  if (!parsed.success) {
+    const paths = [...new Set(parsed.error.issues.map((issue) => issue.path.join('.') || 'root'))];
+    throw new StudyGateError('MALFORMED_RESPONSE', {
+      diagnostic: `schema_validation:${paths.slice(0, 6).join(',')}`,
+    });
+  }
 
   const normalizedSource = normalizedEvidence(sourceText);
   if (parsed.data.evidence.some((cue) => !normalizedSource.includes(normalizedEvidence(cue))))
-    throw new StudyGateError('MALFORMED_RESPONSE');
+    throw new StudyGateError('MALFORMED_RESPONSE', { diagnostic: 'evidence_not_in_source' });
   return parsed.data;
 }
 

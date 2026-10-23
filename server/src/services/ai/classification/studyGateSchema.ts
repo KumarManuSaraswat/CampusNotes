@@ -28,7 +28,6 @@ export const studyAssessmentSchema = z
     evidence: z.array(z.string().trim().min(1).max(160)).max(6),
     warnings: z.array(z.string().trim().min(1).max(240)).max(6),
   })
-  .strict()
   .superRefine((assessment, context) => {
     const normalizedTags = assessment.tags.map((tag) => tag.toLowerCase());
     if (new Set(normalizedTags).size !== normalizedTags.length) {
