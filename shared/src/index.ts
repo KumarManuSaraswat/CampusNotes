@@ -1,4 +1,12 @@
 import { z } from 'zod';
+export type {
+  StudyDecision,
+  StudyGateStatus,
+  StoredStudyGateStatus,
+  StudyCategory,
+  StudyAssessment,
+  StudyGateResult,
+} from './phase1Types.js';
 const validDay = (value: string) =>
   !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 export const lectureDateSchema = z

@@ -1,0 +1,83 @@
+.study-gate {
+  border: 1px solid #aeb8c5;
+  border-left: 5px solid #53657a;
+  border-radius: 12px;
+  padding: clamp(16px, 4vw, 24px);
+  background: #f8fafc;
+  color: #182638;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.study-gate--approved {
+  border-left-color: #217346;
+}
+.study-gate--rejected,
+.study-gate--failed {
+  border-left-color: #a33434;
+}
+.study-gate--needs_review {
+  border-left-color: #946000;
+}
+.study-gate h2 {
+  font-size: 1.2rem;
+  margin: 0 0 12px;
+}
+.study-gate h3 {
+  font-size: 1rem;
+  margin: 18px 0 8px;
+}
+.study-gate p,
+.study-gate li {
+  line-height: 1.6;
+}
+.study-gate dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+  gap: 8px 16px;
+}
+.study-gate dt {
+  font-weight: 600;
+}
+.study-gate dd {
+  margin: 0;
+}
+.study-gate__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+}
+.study-gate__tags li {
+  border-radius: 20px;
+  padding: 4px 12px;
+  background: #e3eaf2;
+}
+.study-gate__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+.study-gate__actions button {
+  font: inherit;
+  padding: 10px 16px;
+  border: 1px solid #53657a;
+  border-radius: 8px;
+  background: white;
+  color: #182638;
+  cursor: pointer;
+  min-height: 44px;
+}
+.study-gate__actions button:focus-visible {
+  outline: 3px solid #175bc2;
+  outline-offset: 3px;
+}
+@media (max-width: 420px) {
+  .study-gate dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .study-gate__actions button {
+    width: 100%;
+  }
+}
