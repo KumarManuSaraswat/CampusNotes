@@ -11,7 +11,7 @@ import {
   CalendarDays,
 } from 'lucide-react';
 import type { NoteDto } from '@campusnotes/shared';
-import { api, fileUrl, json } from '../services/api';
+import { API_BASE, api, json } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 const reasons = [
@@ -27,18 +27,54 @@ export function NoteDetail() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [reason, setReason] = useState('spam');
   const [description, setDescription] = useState('');
   const { user } = useAuth();
   const toast = useToast();
   useEffect(() => {
+    let active = true;
     setLoading(true);
+    setError('');
+    setNote(null);
     api<NoteDto>('/notes/' + id)
-      .then(setNote)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+      .then((value) => {
+        if (active) setNote(value);
+      })
+      .catch((e) => {
+        if (active) setError(e.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [id, user?.id]);
+  async function downloadOriginal() {
+    if (!note) return;
+    setDownloading(true);
+    try {
+      const response = await fetch(API_BASE + note.downloadUrl, { credentials: 'include' });
+      const mime = response.headers.get('content-type')?.split(';')[0].trim();
+      if (!response.ok || mime !== note.fileType)
+        throw new Error('The original file is unavailable. Please try again later.');
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = note.originalFilename;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (e) {
+      toast((e as Error).message || 'Download failed. Please try again.', 'error');
+    } finally {
+      setDownloading(false);
+    }
+  }
   async function vote(value: -1 | 1) {
     if (!user) {
       toast('Log in to vote.', 'error');
@@ -100,26 +136,11 @@ export function NoteDetail() {
               <span>
                 <FileText size={19} /> Original document
               </span>
-              <a className="button small" href={fileUrl(note.downloadUrl)}>
-                <Download size={16} /> Download
-              </a>
+              <button className="button small" disabled={downloading} onClick={downloadOriginal}>
+                <Download size={16} /> {downloading ? 'Preparing…' : 'Download'}
+              </button>
             </div>
-            {note.fileType === 'application/pdf' ? (
-              <iframe
-                title="Document preview"
-                src={fileUrl(note.previewUrl)}
-                className="document-preview"
-              />
-            ) : (
-              <img
-                className="image-preview"
-                src={fileUrl(note.previewUrl)}
-                alt={`Preview of ${note.title}`}
-              />
-            )}
-            <p className="preview-caption">
-              If the preview does not load, use Download to open the original file.
-            </p>
+            <OriginalPreview note={note} />
           </div>
         </div>
         <aside>
@@ -223,5 +244,81 @@ export function NoteDetail() {
         </aside>
       </div>
     </div>
+  );
+}
+
+function OriginalPreview({ note }: { note: NoteDto }) {
+  const [url, setUrl] = useState('');
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectUrl = '';
+    setStatus('loading');
+    setUrl('');
+    fetch(API_BASE + note.previewUrl, { credentials: 'include', signal: controller.signal })
+      .then(async (response) => {
+        const mime = response.headers.get('content-type')?.split(';')[0].trim();
+        if (!response.ok || mime !== note.fileType)
+          throw new Error(
+            'Preview could not be loaded. The original may be temporarily unavailable.',
+          );
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+        setStatus('ready');
+      })
+      .catch((error: Error) => {
+        if (error.name !== 'AbortError') setStatus('error');
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [note.id, note.previewUrl, note.fileType, attempt]);
+
+  if (status === 'loading')
+    return (
+      <div className="preview-state" role="status">
+        <div className="preview-skeleton" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <span className="sr-only">Loading original preview…</span>
+      </div>
+    );
+  if (status === 'error')
+    return (
+      <div className="preview-state error" role="alert">
+        <div>
+          <p>Preview unavailable. The original may be temporarily unavailable.</p>
+          <button className="button small" onClick={() => setAttempt((value) => value + 1)}>
+            Retry preview
+          </button>
+        </div>
+      </div>
+    );
+  return note.fileType === 'application/pdf' ? (
+    <>
+      <iframe title="Document preview" src={url} className="document-preview" />
+      <p className="preview-open">
+        <a href={url} target="_blank" rel="noreferrer">
+          Open PDF in a new tab
+        </a>
+      </p>
+    </>
+  ) : (
+    <a
+      className="image-open"
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      aria-label="Open image at full size"
+    >
+      <img className="image-preview" src={url} alt={`Preview of ${note.title}`} />
+    </a>
   );
 }

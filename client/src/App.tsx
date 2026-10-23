@@ -1,3 +1,4 @@
+import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
@@ -11,6 +12,28 @@ import { MyNotes } from './pages/MyNotes';
 import { Profile } from './pages/Profile';
 import { Requests } from './pages/Requests';
 import { Admin } from './pages/Admin';
+class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('CampusNotes page render failed', error, info.componentStack);
+  }
+  render() {
+    if (this.state.failed)
+      return (
+        <main className="container page empty" role="alert">
+          <h1>Something went wrong</h1>
+          <p>This page could not be displayed.</p>
+          <button className="button" onClick={() => window.location.reload()}>
+            Reload CampusNotes
+          </button>
+        </main>
+      );
+    return this.props.children;
+  }
+}
 function Protected({
   children,
   moderator = false,
@@ -73,12 +96,14 @@ function Content() {
 }
 export default function App() {
   return (
-    <BrowserRouter>
-      <ToastProvider>
-        <AuthProvider>
-          <Content />
-        </AuthProvider>
-      </ToastProvider>
-    </BrowserRouter>
+    <AppErrorBoundary>
+      <BrowserRouter>
+        <ToastProvider>
+          <AuthProvider>
+            <Content />
+          </AuthProvider>
+        </ToastProvider>
+      </BrowserRouter>
+    </AppErrorBoundary>
   );
 }

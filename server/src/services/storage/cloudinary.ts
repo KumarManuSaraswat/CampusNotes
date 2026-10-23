@@ -16,8 +16,7 @@ export interface StoredFile {
 export interface StorageAdapter {
   upload(buffer: Buffer, mime: string): Promise<StoredFile>;
   remove(file: StoredFile): Promise<void>;
-  deliveryUrl(file: StoredFile, download: boolean): string;
-  read(file: StoredFile): Promise<Buffer>;
+  read(file: StoredFile, mime: string): Promise<Buffer>;
 }
 export const storage: StorageAdapter = {
   upload(buffer, mime) {
@@ -51,21 +50,43 @@ export const storage: StorageAdapter = {
       invalidate: true,
     });
   },
-  deliveryUrl(file, download) {
-    return cloudinary.url(file.storagePublicId, {
+  async read(file, mime) {
+    const format = mime === 'application/pdf' ? 'pdf' : mime === 'image/jpeg' ? 'jpg' : 'png';
+    const url = cloudinary.utils.private_download_url(file.storagePublicId, format, {
       resource_type: file.storageResourceType,
       type: 'authenticated',
-      sign_url: true,
-      secure: true,
-      ...(download ? { flags: 'attachment' } : {}),
+      expires_at: Math.floor(Date.now() / 1000) + 300,
     });
-  },
-  async read(file) {
-    const response = await fetch(this.deliveryUrl(file, false));
-    if (!response.ok) throw new Error('Stored original could not be retrieved.');
-    const data = Buffer.from(await response.arrayBuffer());
-    if (data.length > env.MAX_FILE_MB * 1024 * 1024)
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || parsed.hostname !== 'api.cloudinary.com')
+      throw new Error('Cloudinary returned an unexpected download endpoint.');
+    const response = await fetch(parsed, { signal: AbortSignal.timeout(20_000) });
+    if (!response.ok || !response.body)
+      throw new Error(`Cloudinary original download failed with status ${response.status}.`);
+    const maxBytes = env.MAX_FILE_MB * 1024 * 1024;
+    const declaredSize = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredSize) && declaredSize > maxBytes)
       throw new Error('Stored original exceeds the configured limit.');
-    return data;
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxBytes) {
+          await reader.cancel();
+          throw new Error('Stored original exceeds the configured limit.');
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return Buffer.concat(
+      chunks.map((chunk) => Buffer.from(chunk)),
+      size,
+    );
   },
 };

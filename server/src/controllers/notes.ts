@@ -17,6 +17,9 @@ const upload = multer({
   limits: { fileSize: readEnv().MAX_FILE_MB * 1024 * 1024, files: 1 },
 });
 const allowed = new Set(['application/pdf', 'image/jpeg', 'image/png']);
+const validPdfMarkers = (buffer: Buffer) =>
+  buffer.subarray(0, 1024).includes(Buffer.from('%PDF-')) &&
+  buffer.subarray(-1024).includes(Buffer.from('%%EOF'));
 const validId = (id: string) => {
   if (!mongoose.isValidObjectId(id))
     throw new HttpError(400, 'VALIDATION_ERROR', 'Invalid note identifier.');
@@ -116,7 +119,13 @@ export function noteRoutes(router: Router) {
         !req.file.mimetype ||
         req.file.mimetype === 'application/octet-stream' ||
         detected?.mime === req.file.mimetype;
-      if (!detected || !allowed.has(detected.mime) || !declaredTypeAllowed || !validExtension)
+      if (
+        !detected ||
+        !allowed.has(detected.mime) ||
+        !declaredTypeAllowed ||
+        !validExtension ||
+        (detected.mime === 'application/pdf' && !validPdfMarkers(req.file.buffer))
+      )
         throw new HttpError(
           400,
           'INVALID_FILE',
@@ -146,7 +155,9 @@ export function noteRoutes(router: Router) {
         await note.populate('uploadedBy', 'name');
         ok(res, await dto(note, req.actor!.id), 'Note uploaded.', 201);
       } catch (error) {
-        await storage.remove(stored).catch(() => {});
+        await storage.remove(stored).catch(() => {
+          console.error('Storage cleanup failed after note persistence failed.');
+        });
         throw error;
       }
     }),
@@ -199,15 +210,52 @@ export function noteRoutes(router: Router) {
     '/notes/:id/file',
     wrap(async (req, res) => {
       const note = await getNote(req.params.id);
-      const url = storage.deliveryUrl(
-        {
-          storagePublicId: note.storagePublicId,
-          storageResourceType: note.storageResourceType as 'raw' | 'image',
-          storageProvider: 'cloudinary',
-        },
-        req.query.download === '1',
+      if (
+        note.storageProvider !== 'cloudinary' ||
+        !note.storagePublicId ||
+        !['raw', 'image'].includes(note.storageResourceType)
+      )
+        throw new HttpError(404, 'FILE_UNAVAILABLE', 'The original file is unavailable.');
+      let data: Buffer;
+      try {
+        data = await storage.read(
+          {
+            storagePublicId: note.storagePublicId,
+            storageResourceType: note.storageResourceType as 'raw' | 'image',
+            storageProvider: 'cloudinary',
+          },
+          note.fileType,
+        );
+      } catch {
+        throw new HttpError(502, 'FILE_UNAVAILABLE', 'The original file could not be retrieved.');
+      }
+      const detected = await fileTypeFromBuffer(data);
+      if (
+        !detected ||
+        detected.mime !== note.fileType ||
+        !allowed.has(detected.mime) ||
+        (detected.mime === 'application/pdf' && !validPdfMarkers(data))
+      )
+        throw new HttpError(502, 'FILE_INVALID', 'The stored original is not a valid document.');
+      const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+      const safeName = fileName(note.originalFilename);
+      const fallbackName = `download.${
+        detected.mime === 'application/pdf' ? 'pdf' : detected.mime === 'image/jpeg' ? 'jpg' : 'png'
+      }`;
+      const encodedName = encodeURIComponent(safeName).replace(
+        /[!'()*]/g,
+        (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
       );
-      res.redirect(302, url);
+      res
+        .status(200)
+        .set({
+          'Content-Type': detected.mime,
+          'Content-Length': String(data.length),
+          'Content-Disposition': `${disposition}; filename="${fallbackName}"; filename*=UTF-8''${encodedName}`,
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'private, no-store',
+        })
+        .send(data);
     }),
   );
   router.patch(
