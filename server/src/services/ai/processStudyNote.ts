@@ -7,7 +7,11 @@ import { HttpError } from '../../utils/http.js';
 import { storage } from '../storage/cloudinary.js';
 import { prepareDocument, type DocumentMimeType } from './document/prepareDocument.js';
 import { extractVisualText } from './vision/visionAnalyzer.js';
-import { assessStudyContent, studyAssessmentSchema } from './classification/studyGate.js';
+import {
+  assessStudyContent,
+  StudyGateError,
+  studyAssessmentSchema,
+} from './classification/studyGate.js';
 import { suggestMetadata } from './suggestMetadata.js';
 import { analysisFailure, type AnalysisStage } from './analysisFailure.js';
 
@@ -88,7 +92,8 @@ export async function processStudyNote(noteId: string, actorId: string) {
           studyAssessment: null,
           processingError: null,
           studyGateAttemptId: attemptId,
-          studyGateExpiresAt: new Date(Date.now() + 180_000),
+          // Allows two vision attempts at the 150s default plus classification and I/O time.
+          studyGateExpiresAt: new Date(Date.now() + 420_000),
           reviewMessage: '',
         },
         $inc: { studyGateInputVersion: 1 },
@@ -123,7 +128,7 @@ export async function processStudyNote(noteId: string, actorId: string) {
       stage = 'vision';
       const extracted =
         prepared.status === 'vision_required'
-          ? await extractVisualText({ bytes, mimeType }, { timeoutMs: 15_000 })
+          ? await extractVisualText({ bytes, mimeType })
           : { text: prepared.text, warnings: [] };
       // Reading warnings indicate incomplete evidence. Never classify that subset as the whole file.
       stage = 'classification';
@@ -140,7 +145,6 @@ export async function processStudyNote(noteId: string, actorId: string) {
             }
           : await assessStudyContent(
               { extractedText: extracted.text ?? '', originalFilename: note.originalFilename },
-              { timeoutMs: 15_000 },
             ),
       );
       const gate = { academic: 'approved', non_academic: 'rejected', review: 'needs_review' }[
@@ -173,7 +177,12 @@ export async function processStudyNote(noteId: string, actorId: string) {
       if (error instanceof HttpError) throw error;
       const failure = analysisFailure(stage, error);
       // Never log provider messages, signed URLs, document content or credentials.
-      console.warn('Study analysis failed', { attemptId, stage, code: failure.code });
+      console.warn('Study analysis failed', {
+        attemptId,
+        stage,
+        code: failure.code,
+        detail: error instanceof StudyGateError ? error.diagnostic : undefined,
+      });
       const saved = await Note.findOneAndUpdate(
         attempt,
         {

@@ -33,11 +33,15 @@ async function request(
           ? 'Sign in to check your document.'
           : error.status === 403 || error.status === 404
             ? 'This document is unavailable to your account.'
-            : error.status === 409
-              ? 'An analysis is already running. Check its status shortly.'
-              : error.status === 501 || error.code === 'AI_NOT_CONFIGURED'
-                ? 'Document analysis is not available yet. Your upload is retained.'
-                : 'The analysis could not finish. Your upload is retained. Please retry later.';
+            : error.code === 'AI_BUSY'
+              ? 'Another analysis is still running. Wait for it to finish, then refresh the document status.'
+              : error.code === 'RATE_LIMITED'
+                ? 'Too many requests were sent recently. Wait a few minutes before retrying.'
+                : error.status === 409
+                  ? 'An analysis is already running. Check its status shortly.'
+                  : error.status === 501 || error.code === 'AI_NOT_CONFIGURED'
+                    ? 'Document analysis is not available yet. Your upload is retained.'
+                    : 'The analysis could not finish. Your upload is retained. Please retry later.';
       throw new StudyGateApiError(
         error.code,
         message,
