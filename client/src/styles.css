@@ -662,6 +662,43 @@ footer {
   font-weight: 700;
   margin-bottom: 16px;
 }
+.auth-password-field > label {
+  display: block;
+}
+.auth-password-control {
+  position: relative;
+  margin-top: 7px;
+}
+.auth-password-control input {
+  margin-top: 0;
+  padding-right: 44px;
+}
+.auth-password-control input[aria-invalid='true'] {
+  border-color: #d16a6a;
+}
+.auth-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #69748b;
+}
+.auth-password-toggle:hover {
+  background: #f1f3fb;
+  color: #4c59b6;
+}
+.auth-password-toggle:focus-visible {
+  outline: 2px solid #707bc9;
+  outline-offset: 2px;
+}
 .field textarea {
   resize: vertical;
 }
@@ -681,6 +718,9 @@ footer {
   padding: 10px 13px;
   border-radius: 8px;
   font-size: 13px;
+}
+.auth-password-field .password-mismatch {
+  margin: 8px 0 0;
 }
 .auth-switch {
   text-align: center;
