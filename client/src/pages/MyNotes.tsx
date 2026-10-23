@@ -5,6 +5,7 @@ import type { NoteDto } from '@campusnotes/shared';
 import { api, json } from '../services/api';
 import { MetadataFields, type Metadata } from '../components/upload/MetadataFields';
 import { useToast } from '../contexts/ToastContext';
+import { StudyGateControls } from '../components/ai/StudyGateControls';
 export function MyNotes() {
   const [notes, setNotes] = useState<NoteDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -12,6 +13,8 @@ export function MyNotes() {
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<Metadata | null>(null);
   const [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState('all');
+  const [expanded, setExpanded] = useState<string | null>(null);
   const toast = useToast();
   useEffect(() => {
     api<NoteDto[]>('/users/me/notes')
@@ -78,55 +81,123 @@ export function MyNotes() {
         </Link>
       </div>
       {error && <p className="form-error">{error}</p>}
+      <div className="library-stats">
+        <div>
+          <span>Total uploads</span>
+          <strong>{notes.length}</strong>
+        </div>
+        <div>
+          <span>In the public library</span>
+          <strong>{notes.filter((n) => n.studyGateStatus === 'approved').length}</strong>
+        </div>
+        <div>
+          <span>Private / need attention</span>
+          <strong>{notes.filter((n) => n.studyGateStatus !== 'approved').length}</strong>
+        </div>
+      </div>
+      <div className="tabs">
+        {['all', 'approved', 'private'].map((value) => (
+          <button
+            key={value}
+            className={filter === value ? 'active' : ''}
+            onClick={() => setFilter(value)}
+          >
+            {value === 'all'
+              ? 'All uploads'
+              : value === 'approved'
+                ? 'Published'
+                : 'Private & review'}
+          </button>
+        ))}
+      </div>
       {loading ? (
         <div className="loading">Loading your notes…</div>
       ) : notes.length ? (
         <div className="my-notes-list">
-          {notes.map((n) => (
-            <div className="surface my-note" key={n.id}>
-              <div className="my-note-main">
-                <div className="file-icon">
-                  <BookOpen size={22} />
-                </div>
-                <div>
-                  <Link to={'/notes/' + n.id}>
-                    <h2>{n.title}</h2>
-                  </Link>
-                  <p>
-                    {n.subject || 'Uncategorized'} · {new Date(n.createdAt).toLocaleDateString()} ·{' '}
-                    {n.processingStatus === 'not_requested'
-                      ? 'AI not requested'
-                      : n.processingStatus.replace('_', ' ')}
-                  </p>
-                </div>
+          {filter !== 'all' &&
+            !notes.some((n) =>
+              filter === 'approved'
+                ? n.studyGateStatus === 'approved'
+                : n.studyGateStatus !== 'approved',
+            ) && (
+              <div className="empty">
+                <h3>No notes in this view</h3>
+                <p>Choose All uploads to see the rest of your library.</p>
               </div>
-              <div className="my-note-actions">
-                <button onClick={() => edit(n)}>
-                  <Pencil size={16} /> Edit
-                </button>
-                <button className="danger-link" onClick={() => remove(n)}>
-                  <Trash2 size={16} /> Delete
-                </button>
-              </div>
-              {editing === n.id && form && (
-                <form className="edit-form" onSubmit={save}>
-                  <MetadataFields value={form} onChange={setForm} />
-                  <div className="form-actions">
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => setEditing(null)}
-                    >
-                      Cancel
-                    </button>
-                    <button className="button small" disabled={busy}>
-                      Save changes
-                    </button>
+            )}
+          {notes
+            .filter(
+              (n) =>
+                filter === 'all' ||
+                (filter === 'approved'
+                  ? n.studyGateStatus === 'approved'
+                  : n.studyGateStatus !== 'approved'),
+            )
+            .map((n) => (
+              <div className="surface my-note" key={n.id}>
+                <div className="my-note-main">
+                  <div className="file-icon">
+                    <BookOpen size={22} />
                   </div>
-                </form>
-              )}
-            </div>
-          ))}
+                  <div>
+                    <Link to={'/notes/' + n.id}>
+                      <h2>{n.title}</h2>
+                    </Link>
+                    <p>
+                      {n.subject || 'Uncategorized'} · {new Date(n.createdAt).toLocaleDateString()}{' '}
+                      ·{' '}
+                      <span className={'gate-badge gate-' + n.studyGateStatus}>
+                        {n.reviewRequestedAt
+                          ? 'Review requested'
+                          : n.studyGateStatus === 'approved'
+                            ? 'Published'
+                            : n.studyGateStatus.replaceAll('_', ' ')}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <div className="my-note-actions">
+                  <button onClick={() => setExpanded(expanded === n.id ? null : n.id)}>
+                    {expanded === n.id ? 'Hide status' : 'Study check'}
+                  </button>
+                  <button onClick={() => edit(n)}>
+                    <Pencil size={16} /> Edit
+                  </button>
+                  <button className="danger-link" onClick={() => remove(n)}>
+                    <Trash2 size={16} /> Delete
+                  </button>
+                </div>
+                {expanded === n.id && (
+                  <div className="my-note-gate">
+                    <StudyGateControls
+                      note={n}
+                      onChange={(updated) =>
+                        setNotes((current) =>
+                          current.map((item) => (item.id === updated.id ? updated : item)),
+                        )
+                      }
+                    />
+                  </div>
+                )}
+                {editing === n.id && form && (
+                  <form className="edit-form" onSubmit={save}>
+                    <MetadataFields value={form} onChange={setForm} />
+                    <div className="form-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => setEditing(null)}
+                      >
+                        Cancel
+                      </button>
+                      <button className="button small" disabled={busy}>
+                        Save changes
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            ))}
         </div>
       ) : (
         <div className="empty">

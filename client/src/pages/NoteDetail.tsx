@@ -15,6 +15,7 @@ import type { NoteDto } from '@campusnotes/shared';
 import { API_BASE, api, json } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
+import { StudyGateControls } from '../components/ai/StudyGateControls';
 const reasons = [
   ['spam', 'Spam'],
   ['misleading_metadata', 'Misleading metadata'],
@@ -137,6 +138,7 @@ export function NoteDetail() {
       </Link>
       <div className="detail-grid">
         <div>
+          {user?.id === note.uploadedBy.id && <StudyGateControls note={note} onChange={setNote} />}
           <div className="detail-heading">
             <span className="pill">{note.subject || 'Uncategorized'}</span>
             <h1>{note.title}</h1>
@@ -197,7 +199,9 @@ export function NoteDetail() {
                 aria-label="Upvote"
                 aria-pressed={note.myVote === 1}
                 className={note.myVote === 1 ? 'selected' : ''}
-                disabled={busy || user?.id === note.uploadedBy.id}
+                disabled={
+                  busy || user?.id === note.uploadedBy.id || note.studyGateStatus !== 'approved'
+                }
                 onClick={() => vote(1)}
               >
                 <ArrowUp size={20} />
@@ -207,7 +211,9 @@ export function NoteDetail() {
                 aria-label="Downvote"
                 aria-pressed={note.myVote === -1}
                 className={note.myVote === -1 ? 'selected' : ''}
-                disabled={busy || user?.id === note.uploadedBy.id}
+                disabled={
+                  busy || user?.id === note.uploadedBy.id || note.studyGateStatus !== 'approved'
+                }
                 onClick={() => vote(-1)}
               >
                 <ArrowDown size={20} />
@@ -232,6 +238,7 @@ export function NoteDetail() {
           <div className="surface side-panel">
             <button
               className="link-button report-link"
+              disabled={note.studyGateStatus !== 'approved'}
               onClick={() =>
                 user ? setShowReport(!showReport) : toast('Log in to report a note.', 'error')
               }

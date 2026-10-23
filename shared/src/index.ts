@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { StoredStudyGateStatus, StudyAssessment } from './phase1Types.js';
 export type {
   StudyDecision,
   StudyGateStatus,
@@ -50,6 +51,10 @@ export interface NoteDto {
   semester: string;
   uploadedBy: { id: string; name: string };
   processingStatus: ProcessingStatus;
+  studyGateStatus: StoredStudyGateStatus;
+  studyAssessment: StudyAssessment | null;
+  reviewRequestedAt: string | null;
+  reviewMessage: string;
   metadataSource: MetadataSource;
   upvoteCount: number;
   downvoteCount: number;

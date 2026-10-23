@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, BookOpen, Search, UploadCloud, Users } from 'lucide-react';
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Search,
+  UploadCloud,
+  Bookmark,
+  MessageSquareText,
+  Sparkles,
+  BookOpen,
+  Check,
+} from 'lucide-react';
 import type { NoteDto } from '@campusnotes/shared';
 import { api } from '../services/api';
 import { NoteCard } from '../components/notes/NoteCard';
@@ -13,126 +23,182 @@ export function Home() {
   const navigate = useNavigate();
   const { user } = useAuth();
   useEffect(() => {
-    api<{ items: NoteDto[] }>('/notes?limit=3')
+    const controller = new AbortController();
+    api<{ items: NoteDto[] }>('/notes?limit=3', { signal: controller.signal })
       .then((d) => setItems(d.items))
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+      .catch((e) => {
+        if (e.name !== 'AbortError') setError(e.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
   }, []);
   return (
-    <>
-      <section className="hero">
-        <div className="container hero-grid">
-          <div>
-            <span className="eyebrow">A shared space for better learning</span>
-            <h1>
-              Every great lecture deserves <em>better notes.</em>
-            </h1>
-            <p>
-              Find the notes you missed, share the ones you took, and make studying a little easier
-              for everyone on campus.
-            </p>
-            <form
-              className="hero-search"
-              onSubmit={(e) => {
-                e.preventDefault();
-                navigate('/discover?q=' + encodeURIComponent(search));
-              }}
-            >
-              <Search size={20} />
-              <input
-                aria-label="Search notes"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search subjects, topics, or notes"
-              />
-              <button type="submit">
-                Explore notes <ArrowRight size={16} />
-              </button>
-            </form>
-            <div className="hero-links">
-              <Link to={user ? '/upload' : '/register'}>
-                <UploadCloud size={17} /> Share your notes
+    <div className="container page dashboard-page">
+      <div className="dashboard-greeting">
+        <div>
+          <span className="eyebrow">YOUR NEXT CHAPTER STARTS HERE</span>
+          <h1>
+            {user ? `Welcome back, ${user.name.split(' ')[0]}` : 'A little clarity goes a long way'}
+            <span className="purple-dot">.</span>
+          </h1>
+          <p>A shared space for big ideas, better notes, and your next aha moment.</p>
+        </div>
+        <span className="workspace-badge">
+          <span /> A space to grow
+        </span>
+      </div>
+      <section className="welcome-banner">
+        <div className="welcome-copy">
+          <span className="hero-kicker">
+            <Sparkles size={15} /> STUDY TOGETHER. GO FURTHER.
+          </span>
+          <h2>
+            Less searching.
+            <br />
+            More <em>understanding.</em>
+          </h2>
+          <p>
+            The lecture you missed. The concept that finally clicks.
+            <br className="desktop-break" /> Find your next breakthrough in notes from your
+            community.
+          </p>
+          <form
+            className="workspace-search"
+            onSubmit={(e) => {
+              e.preventDefault();
+              navigate('/discover?q=' + encodeURIComponent(search.trim()));
+            }}
+          >
+            <Search size={20} />
+            <input
+              aria-label="Search notes"
+              placeholder="What are you learning today?"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <button aria-label="Find notes">
+              <ArrowRight size={20} />
+            </button>
+          </form>
+          <div className="popular-topics">
+            <span>Explore</span>
+            {['Mathematics', 'Computer Science', 'Physics'].map((subject) => (
+              <Link key={subject} to={'/discover?subject=' + encodeURIComponent(subject)}>
+                {subject}
               </Link>
-              <span>•</span>
-              <Link to="/requests">
-                <Users size={17} /> Help a classmate
-              </Link>
-            </div>
+            ))}
           </div>
-          <div className="hero-art" aria-hidden="true">
-            <div className="art-orbit orbit-one" />
-            <div className="art-orbit orbit-two" />
-            <div className="art-sheet sheet-back" />
-            <div className="art-sheet sheet-front">
-              <div className="art-sheet-icon">
-                <BookOpen size={31} />
-              </div>
-              <div className="art-line long" />
-              <div className="art-line" />
-              <div className="art-line mid" />
-              <div className="art-tags">
-                <span>Share</span>
-                <span>Discover</span>
-                <span>Learn</span>
-              </div>
-            </div>
-            <div className="floating-chip chip-top">Made by students</div>
-            <div className="floating-chip chip-bottom">For the whole campus</div>
+        </div>
+        <div className="welcome-art" aria-hidden="true">
+          <div className="art-halo" />
+          <div className="floating-label">
+            <Sparkles size={16} /> A little inspiration
+          </div>
+          <div className="notebook-back" />
+          <div className="notebook">
+            <div className="notebook-binding" />
+            <span className="notebook-label">THE KNOWLEDGE COLLECTIVE</span>
+            <BookOpen size={37} />
+            <h3>
+              Good notes.
+              <br />
+              Great possibilities.
+            </h3>
+            <div className="notebook-line" />
+            <div className="notebook-line short" />
+            <span className="notebook-sticker">Keep being curious ✦</span>
+          </div>
+          <div className="floating-check">
+            <Check size={18} /> Learn something new
           </div>
         </div>
       </section>
-      <section className="section">
-        <div className="container">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">Fresh from the community</span>
-              <h2>Recently shared notes</h2>
-            </div>
-            <Link className="text-link with-arrow" to="/discover">
-              Browse all <ArrowRight size={17} />
-            </Link>
-          </div>
-          {loading ? (
-            <div className="loading">Loading recent notes…</div>
-          ) : error ? (
-            <div className="empty">
-              <BookOpen size={28} />
-              <h3>Recent notes could not load</h3>
-              <p>{error}</p>
-              <button className="secondary-button" onClick={() => window.location.reload()}>
-                Try again
-              </button>
-            </div>
-          ) : items.length ? (
-            <div className="cards-grid">
-              {items.map((n) => (
-                <NoteCard key={n.id} note={n} />
-              ))}
-            </div>
-          ) : (
-            <div className="empty">
-              <BookOpen size={28} />
-              <h3>Notes will appear here</h3>
-              <p>Be the first to share something useful with your classmates.</p>
-              <Link className="button" to={user ? '/upload' : '/register'}>
-                Share a note
-              </Link>
-            </div>
-          )}
-        </div>
-      </section>
-      <section className="bottom-cta">
-        <div className="container bottom-cta-inner">
+      <div className="quick-actions">
+        <Link to={user ? '/upload' : '/register'}>
+          <span className="quick-icon purple">
+            <UploadCloud size={23} />
+          </span>
           <div>
-            <span className="eyebrow">Better together</span>
-            <h2>Your notes could make someone's day.</h2>
-            <p>One upload can help a whole class catch up.</p>
+            <h3>Share your knowledge</h3>
+            <p>Upload notes. Help a classmate.</p>
           </div>
-          <Link className="button" to={user ? '/upload' : '/register'}>
-            Start sharing <ArrowRight size={18} />
+          <ArrowUpRight size={19} />
+        </Link>
+        <Link to={user ? '/saved' : '/login'}>
+          <span className="quick-icon peach">
+            <Bookmark size={23} />
+          </span>
+          <div>
+            <h3>Your study collection</h3>
+            <p>Save now. Come back inspired.</p>
+          </div>
+          <ArrowUpRight size={19} />
+        </Link>
+        <Link to="/requests">
+          <span className="quick-icon mint">
+            <MessageSquareText size={23} />
+          </span>
+          <div>
+            <h3>Ask the community</h3>
+            <p>Missing a lecture? Start here.</p>
+          </div>
+          <ArrowUpRight size={19} />
+        </Link>
+      </div>
+      <section className="latest-section">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">FRESH PERSPECTIVES</span>
+            <h2>New in the library</h2>
+          </div>
+          <Link className="text-link" to="/discover">
+            Explore all notes <ArrowRight size={16} />
           </Link>
         </div>
+        {error ? (
+          <div className="soft-banner" role="alert">
+            <strong>The library couldn’t load just now.</strong>
+            <p>{error}</p>
+            <Link to="/discover" className="text-link">
+              Try discovery →
+            </Link>
+          </div>
+        ) : loading ? (
+          <div className="cards-grid" aria-label="Loading notes">
+            {[0, 1, 2].map((n) => (
+              <div className="card-skeleton" key={n} />
+            ))}
+          </div>
+        ) : items.length ? (
+          <div className="cards-grid">
+            {items.map((note) => (
+              <NoteCard note={note} key={note.id} />
+            ))}
+          </div>
+        ) : (
+          <div className="library-empty">
+            <span className="quick-icon purple">
+              <BookOpen size={28} />
+            </span>
+            <div>
+              <h3>Every great library starts with one idea.</h3>
+              <p>Be the first to share a set of study notes with your community.</p>
+            </div>
+            <Link className="secondary-button" to={user ? '/upload' : '/register'}>
+              Share the first note <ArrowUpRight size={17} />
+            </Link>
+          </div>
+        )}
       </section>
-    </>
+      <div className="community-strip">
+        <span>✦</span>
+        <p>Knowledge is better when it’s shared.</p>
+        <Link to="/requests">
+          Make someone’s day <ArrowRight size={16} />
+        </Link>
+      </div>
+    </div>
   );
 }

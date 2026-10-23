@@ -5,10 +5,19 @@ import { fileTypeFromBuffer } from 'file-type';
 import { z } from 'zod';
 import { lectureDateSchema, metadataSchema } from '@campusnotes/shared';
 import { Note } from '../models/Note.js';
+import { Bookmark } from '../models/Bookmark.js';
+import { assertReadable, assertPublic, publicNoteQuery } from '../services/ai/noteVisibility.js';
+import {
+  aiAvailable,
+  processStudyNote,
+  studyNoteStatus,
+  ownedNote,
+  gateDto,
+} from '../services/ai/processStudyNote.js';
 import { Vote } from '../models/Vote.js';
 import { Report } from '../models/Report.js';
 import { NoteRequest } from '../models/NoteRequest.js';
-import { requireAuth, optionalAuth } from '../middleware/auth.js';
+import { requireAuth, optionalAuth, requireRole } from '../middleware/auth.js';
 import { storage, type StoredFile } from '../services/storage/cloudinary.js';
 import { HttpError, ok, wrap } from '../utils/http.js';
 import { readEnv } from '../config/env.js';
@@ -70,6 +79,10 @@ async function dto(note: any, userId?: string) {
     semester: note.semester,
     uploadedBy: { id: String(owner ? owner.id : note.uploadedBy), name: owner?.name || 'Student' },
     processingStatus: note.processingStatus,
+    studyGateStatus: note.studyGateStatus || 'legacy_unreviewed',
+    studyAssessment: note.studyAssessment ?? null,
+    reviewRequestedAt: note.reviewRequestedAt?.toISOString() ?? null,
+    reviewMessage: note.reviewMessage || '',
     metadataSource: note.metadataSource,
     upvoteCount: note.upvoteCount,
     downvoteCount: note.downvoteCount,
@@ -91,6 +104,8 @@ const filterSchema = z.object({
   subject: z.string().max(100).optional(),
   tag: z.string().max(40).optional(),
   instructor: z.string().max(100).optional(),
+  fileType: z.enum(['pdf', 'image']).optional(),
+  semester: z.string().max(40).optional(),
   date: lectureDateSchema.optional(),
   sort: z.enum(['recent', 'score']).default('recent'),
   page: z.coerce.number().int().min(1).default(1),
@@ -101,6 +116,50 @@ const escaped = (s: string) =>
     .map((ch) => ('\\^$.*+?()[]{}|'.includes(ch) ? '\\' + ch : ch))
     .join('');
 export function noteRoutes(router: Router) {
+  router.get('/ai/capabilities', requireAuth, (_req, res) => ok(res, { enabled: aiAvailable() }));
+  router.get(
+    '/users/me/saved-notes',
+    requireAuth,
+    wrap(async (req, res) => {
+      const saved = await Bookmark.find({ user: req.actor!.id }).sort({ createdAt: -1 });
+      const notes = await Note.find({
+        _id: { $in: saved.map((x) => x.note) },
+        ...publicNoteQuery,
+      }).populate('uploadedBy', 'name');
+      const byId = new Map(notes.map((n) => [String(n.id), n]));
+      ok(
+        res,
+        await Promise.all(
+          saved.flatMap((s) => {
+            const n = byId.get(String(s.note));
+            return n ? [dto(n, req.actor!.id)] : [];
+          }),
+        ),
+      );
+    }),
+  );
+  router.put(
+    '/notes/:id/bookmark',
+    requireAuth,
+    wrap(async (req, res) => {
+      const note = await getNote(req.params.id);
+      assertPublic(note);
+      await Bookmark.updateOne(
+        { user: req.actor!.id, note: note._id },
+        { $setOnInsert: { user: req.actor!.id, note: note._id } },
+        { upsert: true },
+      );
+      ok(res, null, 'Note saved.');
+    }),
+  );
+  router.delete(
+    '/notes/:id/bookmark',
+    requireAuth,
+    wrap(async (req, res) => {
+      await Bookmark.deleteOne({ user: req.actor!.id, note: validId(req.params.id) });
+      ok(res, null, 'Note removed from saved notes.');
+    }),
+  );
   router.post(
     '/notes',
     requireAuth,
@@ -160,6 +219,7 @@ export function noteRoutes(router: Router) {
             fileSize: file.size,
             ...stored,
             uploadedBy: req.actor!.id,
+            studyGateStatus: 'pending',
             metadataSource: Object.values(data).some((x) => (Array.isArray(x) ? x.length : !!x))
               ? 'manual'
               : 'filename',
@@ -200,9 +260,7 @@ export function noteRoutes(router: Router) {
         throw error;
       }
 
-      const response = await Promise.all(
-        createdNotes.map((note) => dto(note, req.actor!.id)),
-      );
+      const response = await Promise.all(createdNotes.map((note) => dto(note, req.actor!.id)));
       ok(res, response, 'Notes uploaded.', 201);
     }),
   );
@@ -210,10 +268,29 @@ export function noteRoutes(router: Router) {
     '/notes',
     wrap(async (req, res) => {
       const f = filterSchema.parse(req.query);
-      const query: any = {};
+      const query: any = { ...publicNoteQuery };
       if (f.q) query.$text = { $search: f.q };
-      if (f.subject) query.subject = new RegExp(escaped(f.subject), 'i');
-      if (f.tag) query.tags = new RegExp(escaped(f.tag), 'i');
+      const clauses: any[] = [];
+      if (f.subject)
+        clauses.push({
+          $or: [
+            { subject: new RegExp(escaped(f.subject), 'i') },
+            { 'studyAssessment.subject': new RegExp(escaped(f.subject), 'i') },
+            { 'studyAssessment.category': new RegExp(escaped(f.subject), 'i') },
+          ],
+        });
+      if (f.tag)
+        clauses.push({
+          $or: [
+            { tags: new RegExp(escaped(f.tag), 'i') },
+            { 'studyAssessment.tags': new RegExp(escaped(f.tag), 'i') },
+          ],
+        });
+      if (clauses.length) query.$and = clauses;
+      if (f.fileType)
+        query.fileType =
+          f.fileType === 'pdf' ? 'application/pdf' : { $in: ['image/png', 'image/jpeg'] };
+      if (f.semester) query.semester = new RegExp(escaped(f.semester), 'i');
       if (f.instructor) query.instructor = new RegExp(escaped(f.instructor), 'i');
       if (f.date) {
         const start = new Date(f.date + 'T00:00:00.000Z');
@@ -248,12 +325,18 @@ export function noteRoutes(router: Router) {
   router.get(
     '/notes/:id',
     optionalAuth,
-    wrap(async (req, res) => ok(res, await dto(await getNote(req.params.id), req.actor?.id))),
+    wrap(async (req, res) => {
+      const note = await getNote(req.params.id);
+      assertReadable(note, req.actor);
+      ok(res, await dto(note, req.actor?.id));
+    }),
   );
   router.get(
     '/notes/:id/file',
+    optionalAuth,
     wrap(async (req, res) => {
       const note = await getNote(req.params.id);
+      assertReadable(note, req.actor);
       if (
         note.storageProvider !== 'cloudinary' ||
         !note.storagePublicId ||
@@ -347,6 +430,7 @@ export function noteRoutes(router: Router) {
           await Note.deleteOne({ _id: note.id }, { session });
           await Vote.deleteMany({ note: note.id }, { session });
           await Report.deleteMany({ note: note.id }, { session });
+          await Bookmark.deleteMany({ note: note.id }, { session });
         });
       } finally {
         await session.endSession();
@@ -361,10 +445,131 @@ export function noteRoutes(router: Router) {
       ok(res, null, 'Note deleted.');
     }),
   );
-  router.post('/notes/:id/ai-process', requireAuth, (_req, res) =>
-    res.status(501).json({
-      success: false,
-      error: { code: 'AI_NOT_CONFIGURED', message: 'AI organization is not configured yet.' },
+  router.post(
+    '/notes/:id/ai-process',
+    requireAuth,
+    wrap(async (req, res) => {
+      ok(res, await processStudyNote(req.params.id, req.actor!.id), 'Analysis state updated.');
+    }),
+  );
+  router.get(
+    '/notes/:id/ai-status',
+    requireAuth,
+    wrap(async (req, res) => {
+      ok(res, await studyNoteStatus(req.params.id, req.actor!.id));
+    }),
+  );
+  router.post(
+    '/notes/:id/request-review',
+    requireAuth,
+    wrap(async (req, res) => {
+      await studyNoteStatus(req.params.id, req.actor!.id);
+      const note = await Note.findOneAndUpdate(
+        {
+          _id: req.params.id,
+          uploadedBy: req.actor!.id,
+          studyGateStatus: { $ne: 'approved' },
+          processingStatus: { $ne: 'pending' },
+          reviewRequestedAt: null,
+        },
+        {
+          $set: {
+            reviewRequestedAt: new Date(),
+            reviewMessage: 'Your review request is in the moderator queue.',
+          },
+        },
+        { new: true },
+      );
+      if (!note)
+        throw new HttpError(
+          409,
+          'REVIEW_UNAVAILABLE',
+          'This note is approved, being analysed, or already awaiting review.',
+        );
+      ok(res, gateDto(note), 'Review requested.');
+    }),
+  );
+  router.post(
+    '/notes/:id/apply-suggestions',
+    requireAuth,
+    wrap(async (req, res) => {
+      const note = await ownedNote(req.params.id, req.actor!.id);
+      if (note.studyGateStatus !== 'approved' || note.studyAssessment?.decision !== 'academic')
+        throw new HttpError(409, 'NO_SUGGESTIONS', 'No approved suggestions are available.');
+      const updated = await Note.findOneAndUpdate(
+        {
+          _id: note._id,
+          uploadedBy: req.actor!.id,
+          studyGateStatus: 'approved',
+          studyGateInputVersion: note.studyGateInputVersion,
+        },
+        {
+          $set: {
+            subject: note.studyAssessment.subject,
+            tags: note.studyAssessment.tags.map((x: string) => x.slice(0, 40)),
+            metadataSource: 'ai_reviewed',
+          },
+        },
+        { new: true },
+      );
+      if (!updated)
+        throw new HttpError(409, 'STALE_ATTEMPT', 'Refresh this note before applying suggestions.');
+      await updated.populate('uploadedBy', 'name');
+      ok(res, await dto(updated, req.actor!.id));
+    }),
+  );
+  router.get(
+    '/admin/study-reviews',
+    requireAuth,
+    requireRole('moderator'),
+    wrap(async (_req, res) => {
+      const notes = await Note.find({
+        reviewRequestedAt: { $ne: null },
+        studyGateStatus: { $ne: 'approved' },
+      })
+        .sort({ reviewRequestedAt: 1 })
+        .limit(100)
+        .populate('uploadedBy', 'name');
+      ok(res, await Promise.all(notes.map((n) => dto(n))));
+    }),
+  );
+  router.patch(
+    '/admin/study-reviews/:id',
+    requireAuth,
+    requireRole('moderator'),
+    wrap(async (req, res) => {
+      const { decision, reason } = z
+        .object({
+          decision: z.enum(['approved', 'rejected']),
+          reason: z.string().trim().min(5).max(320),
+        })
+        .parse(req.body);
+      const note = await Note.findById(validId(req.params.id));
+      if (!note) throw new HttpError(404, 'NOT_FOUND', 'Note not found.');
+      if (String(note.uploadedBy) === req.actor!.id)
+        throw new HttpError(403, 'SELF_REVIEW', 'Another moderator must review your upload.');
+      const updated = await Note.findOneAndUpdate(
+        {
+          _id: note._id,
+          reviewRequestedAt: { $ne: null },
+          processingStatus: { $ne: 'pending' },
+          studyGateStatus: { $ne: 'approved' },
+        },
+        {
+          $set: {
+            studyGateStatus: decision,
+            studyGateReviewedAt: new Date(),
+            reviewRequestedAt: null,
+            reviewMessage: reason,
+            reviewedBy: req.actor!.id,
+            studyGateAttemptId: null,
+          },
+        },
+        { new: true },
+      );
+      if (!updated)
+        throw new HttpError(409, 'REVIEW_UNAVAILABLE', 'This review is no longer pending.');
+      ok(res, gateDto(updated), 'Review saved.');
     }),
   );
 }
