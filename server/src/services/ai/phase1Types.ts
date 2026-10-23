@@ -1,5 +1,4 @@
-// Shared wire types are exported here for backend module owners. Keep the existing
-// extraction contracts unchanged until Member 1's document module is ready.
+// Shared wire types and additive document routing types for backend module owners.
 export type {
   StudyDecision,
   StudyGateStatus,
@@ -8,3 +7,10 @@ export type {
   StudyAssessment,
   StudyGateResult,
 } from '@campusnotes/shared';
+export type {
+  DocumentInput,
+  DocumentMimeType,
+  DocumentOptions,
+  PreparedDocument,
+  DocumentErrorCode,
+} from './document/documentTypes.js';
