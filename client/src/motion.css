@@ -1,0 +1,250 @@
+/* Motion is progressive enhancement: content never depends on animation to appear. */
+:root {
+  --motion-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-spring: cubic-bezier(0.34, 1.35, 0.64, 1);
+}
+
+.welcome-banner {
+  box-shadow: 0 16px 50px -34px #7751c566;
+}
+.workspace-search:focus-within,
+.search-bar:focus-within {
+  border-color: #a583df;
+  box-shadow:
+    0 0 0 4px #9d79d914,
+    0 8px 24px #7452a510;
+}
+.button:focus-visible,
+.bookmark-button:focus-visible,
+.workspace-sidebar nav a:focus-visible {
+  outline: 3px solid #b69ae6;
+  outline-offset: 4px;
+}
+
+@media (max-width: 520px) {
+  .welcome-copy h2 {
+    font-size: clamp(1.75rem, 9.5vw, 2.375rem);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes cn-arrive {
+    from {
+      opacity: 0;
+      translate: 0 14px;
+    }
+    to {
+      opacity: 1;
+      translate: 0 0;
+    }
+  }
+  @keyframes cn-float {
+    0%,
+    100% {
+      translate: 0 0;
+    }
+    50% {
+      translate: 0 -9px;
+    }
+  }
+  @keyframes cn-pop {
+    0% {
+      scale: 0.75;
+    }
+    65% {
+      scale: 1.12;
+    }
+    100% {
+      scale: 1;
+    }
+  }
+  @keyframes cn-sheen {
+    from {
+      translate: -130% 0;
+    }
+    to {
+      translate: 230% 0;
+    }
+  }
+  @keyframes cn-spin {
+    to {
+      rotate: 360deg;
+    }
+  }
+  @keyframes cn-overlay {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .page-heading,
+  .dashboard-greeting,
+  .auth-panel,
+  .upload-results,
+  .library-empty {
+    animation: cn-arrive 500ms var(--motion-out) both;
+  }
+  .welcome-banner,
+  .upload-layout,
+  .library-stats {
+    animation: cn-arrive 650ms 70ms var(--motion-out) both;
+  }
+  .quick-actions > a,
+  .cards-grid > .note-card,
+  .my-notes-list > .my-note,
+  .request-list > article {
+    animation: cn-arrive 550ms var(--motion-out) backwards;
+  }
+  .quick-actions > a:nth-child(2),
+  .cards-grid > .note-card:nth-child(3n + 2) {
+    animation-delay: 70ms;
+  }
+  .quick-actions > a:nth-child(3),
+  .cards-grid > .note-card:nth-child(3n + 3) {
+    animation-delay: 140ms;
+  }
+
+  /* A short welcoming motion, then the illustration rests for distraction-free study. */
+  .notebook,
+  .floating-label,
+  .floating-check {
+    animation: cn-float 2200ms ease-in-out 2;
+  }
+  .floating-label {
+    animation-delay: 160ms;
+  }
+  .floating-check {
+    animation-delay: 320ms;
+  }
+
+  .button,
+  .secondary-button,
+  .bookmark-button,
+  .workspace-search,
+  .search-bar,
+  .workspace-sidebar nav a,
+  .workspace-sidebar nav a svg,
+  .note-card,
+  .note-cover,
+  .cover-pattern,
+  .quick-actions > a,
+  .quick-icon,
+  .dropzone,
+  .drop-icon,
+  .text-link svg,
+  .button svg,
+  .subject-chips button {
+    transition:
+      transform 240ms var(--motion-out),
+      translate 240ms var(--motion-out),
+      scale 240ms var(--motion-spring),
+      rotate 240ms var(--motion-out),
+      box-shadow 240ms ease,
+      background-color 240ms ease,
+      border-color 240ms ease,
+      color 240ms ease;
+  }
+  .button:active:not(:disabled),
+  .secondary-button:active:not(:disabled),
+  .bookmark-button:active:not(:disabled) {
+    scale: 0.97;
+  }
+  .bookmark-button.is-saved svg {
+    animation: cn-pop 350ms var(--motion-spring);
+  }
+  .workspace-sidebar nav a.active::after {
+    animation: cn-pop 350ms var(--motion-spring);
+  }
+  .progress span {
+    transition: width 300ms ease-out;
+  }
+  .toast {
+    animation: cn-arrive 300ms var(--motion-out) both;
+  }
+  .nav-scrim {
+    animation: cn-overlay 180ms ease-out;
+  }
+  .study-gate,
+  .selected-file,
+  .my-note-gate {
+    animation: cn-arrive 300ms var(--motion-out);
+  }
+
+  .card-skeleton,
+  .preview-skeleton {
+    position: relative;
+    overflow: hidden;
+  }
+  .card-skeleton::after,
+  .preview-skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    width: 65%;
+    background: linear-gradient(100deg, transparent, #ffffffbb, transparent);
+    animation: cn-sheen 1600ms ease-in-out 3 forwards;
+    pointer-events: none;
+  }
+  .study-gate[aria-busy='true'] h2::before,
+  .loading::before {
+    content: '';
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid #ded0f3;
+    border-top-color: #8055ce;
+    border-radius: 50%;
+    margin-right: 10px;
+    vertical-align: middle;
+    animation: cn-spin 800ms linear infinite;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .note-card:hover {
+      transform: translateY(-6px);
+      box-shadow: 0 18px 36px -20px #68438e55;
+    }
+    .note-card:hover .cover-pattern {
+      scale: 1.1;
+    }
+    .quick-actions > a:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 14px 28px -20px #68438e55;
+    }
+    .quick-actions > a:hover .quick-icon {
+      rotate: -5deg;
+      scale: 1.06;
+    }
+    .workspace-sidebar nav a:hover svg {
+      translate: 2px 0;
+    }
+    .text-link:hover svg,
+    .button:hover:not(:disabled) svg {
+      translate: 3px 0;
+    }
+    .dropzone:hover:not([aria-disabled='true']) {
+      box-shadow:
+        inset 0 0 0 1px #b392e2,
+        0 8px 28px #8055ce10;
+    }
+    .dropzone:hover:not([aria-disabled='true']) .drop-icon {
+      translate: 0 -5px;
+      rotate: -5deg;
+    }
+    .subject-chips button:hover {
+      translate: 0 -2px;
+    }
+  }
+}
+
+/* Explicitly stop motion, including inherited hover transforms, for reduced-motion users. */
+@media (prefers-reduced-motion: reduce) {
+  .note-card:hover,
+  .quick-actions > a:hover,
+  .button:hover {
+    transform: none;
+  }
+}
