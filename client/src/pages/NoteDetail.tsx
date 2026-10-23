@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   ArrowUp,
@@ -9,6 +9,7 @@ import {
   FileText,
   UserRound,
   CalendarDays,
+  Trash2,
 } from 'lucide-react';
 import type { NoteDto } from '@campusnotes/shared';
 import { API_BASE, api, json } from '../services/api';
@@ -23,6 +24,7 @@ const reasons = [
 ];
 export function NoteDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [note, setNote] = useState<NoteDto | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -100,6 +102,19 @@ export function NoteDetail() {
       await api('/notes/' + id + '/report', json('POST', { reason, description }));
       toast('Report submitted. Thank you.');
       setShowReport(false);
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function deleteNote() {
+    if (!note || !window.confirm(`Delete "${note.title}" permanently?`)) return;
+    setBusy(true);
+    try {
+      await api('/notes/' + note.id, { method: 'DELETE' });
+      toast('Note deleted.');
+      navigate('/my-notes');
     } catch (e) {
       toast((e as Error).message, 'error');
     } finally {
@@ -205,6 +220,15 @@ export function NoteDetail() {
               <p className="hint">You cannot vote on your own notes.</p>
             )}
           </div>
+          {user?.id === note.uploadedBy.id && (
+            <div className="surface side-panel">
+              <h2>Manage this note</h2>
+              <p>Remove this upload if it’s incorrect or no longer needed.</p>
+              <button className="delete-note-button" disabled={busy} onClick={deleteNote}>
+                <Trash2 size={16} /> Delete note
+              </button>
+            </div>
+          )}
           <div className="surface side-panel">
             <button
               className="link-button report-link"
