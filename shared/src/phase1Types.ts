@@ -34,4 +34,6 @@ export interface StudyGateResult {
   processingStatus: 'not_requested' | 'pending' | 'completed' | 'failed';
   studyGateStatus: StoredStudyGateStatus;
   assessment: StudyAssessment | null;
+  reviewRequestedAt?: string | null;
+  reviewMessage?: string;
 }

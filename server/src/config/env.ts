@@ -10,7 +10,10 @@ const schema = z.object({
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
   MAX_FILE_MB: z.coerce.number().positive().default(10),
-  AI_ENABLED: z.string().default('false'),
+  AI_ENABLED: z.enum(['true', 'false']).default('false'),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().optional(),
+  AI_MAX_CONCURRENT: z.coerce.number().int().min(1).max(8).default(2),
 });
 export function readEnv() {
   const parsed = schema.safeParse(process.env);

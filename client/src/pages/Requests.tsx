@@ -40,7 +40,7 @@ export function Requests() {
   useEffect(() => {
     if (user)
       api<NoteDto[]>('/users/me/notes')
-        .then(setMyNotes)
+        .then((notes) => setMyNotes(notes.filter((n) => n.studyGateStatus === 'approved')))
         .catch(() => {});
   }, [user?.id]);
   async function create(e: FormEvent) {
@@ -215,7 +215,7 @@ export function Requests() {
               {fulfillId === item.id && (
                 <form className="fulfill-form" onSubmit={fulfill}>
                   <label className="field">
-                    Choose one of your uploaded notes
+                    Choose one of your approved notes
                     <select
                       required
                       value={selectedNote}

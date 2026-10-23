@@ -10,6 +10,7 @@ import { User } from '../models/User.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { HttpError, ok, wrap } from '../utils/http.js';
 import { reputationFor } from '../services/reputation/index.js';
+import { assertPublic, publicNoteQuery } from '../services/ai/noteVisibility.js';
 const id = (s: string) => {
   if (!mongoose.isValidObjectId(s))
     throw new HttpError(400, 'VALIDATION_ERROR', 'Invalid identifier.');
@@ -48,6 +49,7 @@ async function voteState(noteId: string, userId: string) {
 async function changeVote(noteId: string, userId: string, value: -1 | 0 | 1) {
   const note = await Note.findById(id(noteId));
   if (!note) throw new HttpError(404, 'NOT_FOUND', 'Note not found.');
+  assertPublic(note);
   if (String(note.uploadedBy) === userId)
     throw new HttpError(403, 'SELF_VOTE', 'You cannot vote on your own note.');
   // A transaction keeps the unique vote row and denormalized note counts in sync.
@@ -55,6 +57,7 @@ async function changeVote(noteId: string, userId: string, value: -1 | 0 | 1) {
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
+        assertPublic(await Note.findById(noteId).session(session));
         const prior = await Vote.findOne({ note: noteId, user: userId }).session(session);
         const old = prior?.value || 0;
         if (old === value) return;
@@ -129,7 +132,7 @@ export function communityRoutes(router: Router) {
         .limit(100)
         .populate('createdBy', 'name')
         .populate('fulfilledBy', 'name')
-        .populate('fulfilledNote', 'title');
+        .populate({ path: 'fulfilledNote', select: 'title', match: publicNoteQuery });
       ok(
         res,
         items.map((r) => ({
@@ -175,6 +178,7 @@ export function communityRoutes(router: Router) {
       const requestId = id(req.params.id);
       const note = await Note.findById(noteId);
       if (!note) throw new HttpError(404, 'NOT_FOUND', 'Note not found.');
+      assertPublic(note);
       if (String(note.uploadedBy) !== req.actor!.id)
         throw new HttpError(
           403,
@@ -207,7 +211,7 @@ export function communityRoutes(router: Router) {
     requireAuth,
     wrap(async (req, res) => {
       const noteId = id(req.params.id);
-      if (!(await Note.exists({ _id: noteId })))
+      if (!(await Note.exists({ _id: noteId, ...publicNoteQuery })))
         throw new HttpError(404, 'NOT_FOUND', 'Note not found.');
       const data = reportSchema.parse(req.body);
       try {

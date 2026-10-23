@@ -12,6 +12,8 @@ import { MyNotes } from './pages/MyNotes';
 import { Profile } from './pages/Profile';
 import { Requests } from './pages/Requests';
 import { Admin } from './pages/Admin';
+import { SavedNotes } from './pages/SavedNotes';
+import { SavedNotesProvider } from './contexts/SavedNotesContext';
 class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() {
@@ -58,6 +60,14 @@ function Content() {
         <Route path="/notes/:id" element={<NoteDetail />} />
         <Route path="/requests" element={<Requests />} />
         <Route
+          path="/saved"
+          element={
+            <Protected>
+              <SavedNotes />
+            </Protected>
+          }
+        />
+        <Route
           path="/upload"
           element={
             <Protected>
@@ -100,7 +110,9 @@ export default function App() {
       <BrowserRouter>
         <ToastProvider>
           <AuthProvider>
-            <Content />
+            <SavedNotesProvider>
+              <Content />
+            </SavedNotesProvider>
           </AuthProvider>
         </ToastProvider>
       </BrowserRouter>

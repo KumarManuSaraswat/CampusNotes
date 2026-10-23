@@ -4,6 +4,7 @@ import { ShieldCheck } from 'lucide-react';
 import type { Report } from '../types';
 import { api, json } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
+import { StudyReviewQueue } from '../components/ai/StudyReviewQueue';
 const labels: Record<string, string> = {
   spam: 'Spam',
   misleading_metadata: 'Misleading metadata',
@@ -47,6 +48,8 @@ export function Admin() {
         <h1>Moderation</h1>
         <p>Review reports and keep the note library useful.</p>
       </div>
+      <StudyReviewQueue />
+      <h2>Community reports</h2>
       <div className="tabs">
         {['open', 'reviewed', 'resolved', 'all'].map((s) => (
           <button key={s} className={status === s ? 'active' : ''} onClick={() => setStatus(s)}>
