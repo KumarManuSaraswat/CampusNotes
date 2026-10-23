@@ -15,10 +15,30 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [passwordValidationAttempted, setPasswordValidationAttempted] = useState(false);
+  const passwordRequirements = [
+    { label: 'At least 8 characters', met: password.length >= 8 },
+    { label: '128 characters or fewer', met: password.length <= 128 },
+    { label: 'At least one uppercase letter', met: /[A-Z]/.test(password) },
+    { label: 'At least one lowercase letter', met: /[a-z]/.test(password) },
+    { label: 'At least one number', met: /[0-9]/.test(password) },
+  ];
+  const missingPasswordRequirements = passwordRequirements.filter((requirement) => !requirement.met);
+  const missingPasswordLabels = missingPasswordRequirements.map((requirement) =>
+    requirement.label.toLowerCase(),
+  );
+  const missingPasswordSummary =
+    missingPasswordLabels.length > 1
+      ? `${missingPasswordLabels.slice(0, -1).join(', ')} and ${missingPasswordLabels[missingPasswordLabels.length - 1]}`
+      : missingPasswordLabels[0];
   const passwordMismatch = mode === 'register' && confirm.length > 0 && password !== confirm;
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError('');
+    if (mode === 'register') {
+      setPasswordValidationAttempted(true);
+      if (missingPasswordRequirements.length > 0) return;
+    }
     if (mode === 'register' && password !== confirm) {
       return;
     }
@@ -80,9 +100,11 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
                 type={showPassword ? 'text' : 'password'}
                 autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                 minLength={mode === 'register' ? 8 : 1}
-                aria-describedby={mode === 'register' ? 'password-hint' : undefined}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                onInvalid={() => {
+                  if (mode === 'register') setPasswordValidationAttempted(true);
+                }}
               />
               <button
                 className="auth-password-toggle"
@@ -97,9 +119,11 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
           </div>
           {mode === 'register' && (
             <>
-              <small className="hint" id="password-hint">
-                At least 8 characters with uppercase, lowercase, and a number.
-              </small>
+              {passwordValidationAttempted && missingPasswordRequirements.length > 0 && (
+                <p className="form-error password-requirements-error" role="alert">
+                  Password must have {missingPasswordSummary}.
+                </p>
+              )}
               <div className="field auth-password-field">
                 <label htmlFor="auth-confirm-password">Confirm password</label>
                 <div className="auth-password-control">

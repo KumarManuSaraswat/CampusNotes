@@ -9,7 +9,13 @@ import { readEnv } from '../config/env.js';
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().email().toLowerCase(),
-  password: z.string().min(8).max(128).regex(/[A-Z]/).regex(/[a-z]/).regex(/[0-9]/),
+  password: z
+    .string()
+    .min(8, 'Password must be at least 8 characters.')
+    .max(128, 'Password must be 128 characters or fewer.')
+    .regex(/[A-Z]/, 'Password must include at least one uppercase letter.')
+    .regex(/[a-z]/, 'Password must include at least one lowercase letter.')
+    .regex(/[0-9]/, 'Password must include at least one number.'),
 });
 const loginSchema = z.object({ email: z.string().email().toLowerCase(), password: z.string() });
 const publicUser = (u: any) => ({
