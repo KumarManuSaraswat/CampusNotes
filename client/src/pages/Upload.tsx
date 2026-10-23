@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   UploadCloud,
   FileText,
@@ -21,6 +21,7 @@ import { useToast } from '../contexts/ToastContext';
 const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
 const maxSize = 10 * 1024 * 1024;
 const maxFiles = 10;
+const maxTotal = 30 * 1024 * 1024;
 
 type SelectedFile = {
   id: string;
@@ -32,8 +33,17 @@ let nextFileId = 0;
 
 const fileKey = (file: File) => `${file.name}:${file.size}:${file.lastModified}`;
 const formatSize = (size: number) => `${(size / 1024 / 1024).toFixed(2)} MB`;
+const newSubmissionKey = () =>
+  globalThis.crypto?.randomUUID?.() ||
+  'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const value = Math.floor(Math.random() * 16);
+    return (char === 'x' ? value : (value & 3) | 8).toString(16);
+  });
 
 export function Upload() {
+  const [searchParams] = useSearchParams();
+  const requestId = searchParams.get('requestId');
+  const submissionKey = useRef(newSubmissionKey());
   const [files, setFiles] = useState<SelectedFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activePreviewUrls = useRef(new Map<string, string>());
@@ -88,6 +98,18 @@ export function Upload() {
 
       if (file.size > maxSize) {
         invalidMessages.push(`${file.name} must be 10 MB or smaller.`);
+        continue;
+      }
+      const group = [...files, ...validFiles].map((item) => item.file);
+      if (group.reduce((sum, item) => sum + item.size, 0) + file.size > maxTotal) {
+        invalidMessages.push('One note can contain at most 30 MB of files.');
+        continue;
+      }
+      if (
+        group.length &&
+        (extension === '.pdf' || group.some((item) => item.name.toLowerCase().endsWith('.pdf')))
+      ) {
+        invalidMessages.push('Upload one PDF or up to ten images per note.');
         continue;
       }
 
@@ -160,6 +182,7 @@ export function Upload() {
     setProgress(0);
     const form = new FormData();
     files.forEach(({ file }) => form.append('files', file));
+    form.append('submissionKey', submissionKey.current);
     Object.entries(metadata).forEach(([key, value]) => form.append(key, value));
 
     try {
@@ -167,8 +190,8 @@ export function Upload() {
       const notes = await uploadNote(form, setProgress);
       setUploaded(notes);
       toast('Originals saved. Checking your documents now.');
-      for (const [index, note] of notes.entries()) {
-        setStage(`Checking document ${index + 1} of ${notes.length}`);
+      for (const note of notes) {
+        setStage('Reading and checking your note');
         setUploaded((current) =>
           current.map((n) =>
             n.id === note.id
@@ -177,10 +200,14 @@ export function Upload() {
           ),
         );
         try {
-          const result = await processStudyNote(note.id);
-          setUploaded((current) =>
-            current.map((n) => (n.id === note.id ? mergeGate(n, result) : n)),
-          );
+          for (let step = 0; step < (note.assets?.length || 1) + 4; step++) {
+            const result = await processStudyNote(note.id);
+            setStage(result.processingStage?.replaceAll('_', ' ') || 'Checking academic relevance');
+            setUploaded((current) =>
+              current.map((n) => (n.id === note.id ? mergeGate(n, result) : n)),
+            );
+            if (result.processingStatus !== 'pending') break;
+          }
         } catch (error) {
           setError((error as Error).message);
           try {
@@ -225,8 +252,11 @@ export function Upload() {
             <article className="surface upload-result" key={note.id}>
               <div className="section-heading">
                 <h3>{note.title}</h3>
-                <Link className="text-link" to={'/notes/' + note.id}>
-                  Open document ↗
+                <Link
+                  className="text-link"
+                  to={`/notes/${note.id}/review${requestId ? `?requestId=${encodeURIComponent(requestId)}` : ''}`}
+                >
+                  Review and publish ↗
                 </Link>
               </div>
               {busy ? (
@@ -253,6 +283,7 @@ export function Upload() {
               onClick={() => {
                 setUploaded([]);
                 clearFiles();
+                submissionKey.current = newSubmissionKey();
                 setError('');
               }}
             >
@@ -268,7 +299,7 @@ export function Upload() {
                 <span className="step">01</span>
                 <div>
                   <h2>Choose a document</h2>
-                  <p>Up to 10 files · PDF, JPG or PNG · 10 MB each</p>
+                  <p>One PDF or up to 10 images · 10 MB each · 30 MB total</p>
                 </div>
               </div>
               <label

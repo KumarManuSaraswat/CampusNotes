@@ -7,6 +7,7 @@ import { Home } from './pages/Home';
 import { AuthPage } from './pages/Auth';
 import { Discover } from './pages/Discover';
 import { Upload } from './pages/Upload';
+import { SmartReview } from './pages/SmartReview';
 import { NoteDetail } from './pages/NoteDetail';
 import { MyNotes } from './pages/MyNotes';
 import { Profile } from './pages/Profile';
@@ -58,6 +59,14 @@ function Content() {
         <Route path="/register" element={<AuthPage mode="register" />} />
         <Route path="/discover" element={<Discover />} />
         <Route path="/notes/:id" element={<NoteDetail />} />
+        <Route
+          path="/notes/:id/review"
+          element={
+            <Protected>
+              <SmartReview />
+            </Protected>
+          }
+        />
         <Route path="/requests" element={<Requests />} />
         <Route
           path="/saved"

@@ -88,11 +88,23 @@ export function MyNotes() {
         </div>
         <div>
           <span>In the public library</span>
-          <strong>{notes.filter((n) => n.studyGateStatus === 'approved').length}</strong>
+          <strong>
+            {
+              notes.filter(
+                (n) => n.studyGateStatus === 'approved' && n.publicationStatus !== 'draft',
+              ).length
+            }
+          </strong>
         </div>
         <div>
           <span>Private / need attention</span>
-          <strong>{notes.filter((n) => n.studyGateStatus !== 'approved').length}</strong>
+          <strong>
+            {
+              notes.filter(
+                (n) => n.studyGateStatus !== 'approved' || n.publicationStatus === 'draft',
+              ).length
+            }
+          </strong>
         </div>
       </div>
       <div className="tabs">
@@ -117,8 +129,8 @@ export function MyNotes() {
           {filter !== 'all' &&
             !notes.some((n) =>
               filter === 'approved'
-                ? n.studyGateStatus === 'approved'
-                : n.studyGateStatus !== 'approved',
+                ? n.studyGateStatus === 'approved' && n.publicationStatus !== 'draft'
+                : n.studyGateStatus !== 'approved' || n.publicationStatus === 'draft',
             ) && (
               <div className="empty">
                 <h3>No notes in this view</h3>
@@ -130,8 +142,8 @@ export function MyNotes() {
               (n) =>
                 filter === 'all' ||
                 (filter === 'approved'
-                  ? n.studyGateStatus === 'approved'
-                  : n.studyGateStatus !== 'approved'),
+                  ? n.studyGateStatus === 'approved' && n.publicationStatus !== 'draft'
+                  : n.studyGateStatus !== 'approved' || n.publicationStatus === 'draft'),
             )
             .map((n) => (
               <div className="surface my-note" key={n.id}>
@@ -149,14 +161,19 @@ export function MyNotes() {
                       <span className={'gate-badge gate-' + n.studyGateStatus}>
                         {n.reviewRequestedAt
                           ? 'Review requested'
-                          : n.studyGateStatus === 'approved'
+                          : n.studyGateStatus === 'approved' && n.publicationStatus !== 'draft'
                             ? 'Published'
-                            : n.studyGateStatus.replaceAll('_', ' ')}
+                            : n.studyGateStatus === 'approved'
+                              ? 'Ready for review'
+                              : n.studyGateStatus.replaceAll('_', ' ')}
                       </span>
                     </p>
                   </div>
                 </div>
                 <div className="my-note-actions">
+                  {n.publicationStatus === 'draft' && !!n.assets?.length && (
+                    <Link to={`/notes/${n.id}/review`}>Review & publish</Link>
+                  )}
                   <button onClick={() => setExpanded(expanded === n.id ? null : n.id)}>
                     {expanded === n.id ? 'Hide status' : 'Study check'}
                   </button>
@@ -169,14 +186,18 @@ export function MyNotes() {
                 </div>
                 {expanded === n.id && (
                   <div className="my-note-gate">
-                    <StudyGateControls
-                      note={n}
-                      onChange={(updated) =>
-                        setNotes((current) =>
-                          current.map((item) => (item.id === updated.id ? updated : item)),
-                        )
-                      }
-                    />
+                    {n.assets?.length ? (
+                      <Link to={`/notes/${n.id}/review`}>Continue processing and review →</Link>
+                    ) : (
+                      <StudyGateControls
+                        note={n}
+                        onChange={(updated) =>
+                          setNotes((current) =>
+                            current.map((item) => (item.id === updated.id ? updated : item)),
+                          )
+                        }
+                      />
+                    )}
                   </div>
                 )}
                 {editing === n.id && form && (
