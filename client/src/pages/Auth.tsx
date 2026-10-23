@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { BookOpen } from 'lucide-react';
+import { BookOpen, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
@@ -11,13 +11,15 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const passwordMismatch = mode === 'register' && confirm.length > 0 && password !== confirm;
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError('');
     if (mode === 'register' && password !== confirm) {
-      setError('Passwords do not match.');
       return;
     }
     setBusy(true);
@@ -69,32 +71,68 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
               onChange={(e) => setEmail(e.target.value)}
             />
           </label>
-          <label className="field">
-            Password
-            <input
-              required
-              type="password"
-              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-              minLength={mode === 'register' ? 8 : 1}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
+          <div className="field auth-password-field">
+            <label htmlFor="auth-password">Password</label>
+            <div className="auth-password-control">
+              <input
+                id="auth-password"
+                required
+                type={showPassword ? 'text' : 'password'}
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                minLength={mode === 'register' ? 8 : 1}
+                aria-describedby={mode === 'register' ? 'password-hint' : undefined}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button
+                className="auth-password-toggle"
+                type="button"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                aria-pressed={showPassword}
+                onClick={() => setShowPassword((visible) => !visible)}
+              >
+                {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
+              </button>
+            </div>
+          </div>
           {mode === 'register' && (
             <>
-              <small className="hint">
+              <small className="hint" id="password-hint">
                 At least 8 characters with uppercase, lowercase, and a number.
               </small>
-              <label className="field">
-                Confirm password
-                <input
-                  required
-                  type="password"
-                  autoComplete="new-password"
-                  value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
-                />
-              </label>
+              <div className="field auth-password-field">
+                <label htmlFor="auth-confirm-password">Confirm password</label>
+                <div className="auth-password-control">
+                  <input
+                    id="auth-confirm-password"
+                    required
+                    type={showConfirm ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    value={confirm}
+                    aria-invalid={passwordMismatch}
+                    aria-describedby={passwordMismatch ? 'password-mismatch-error' : undefined}
+                    onChange={(e) => setConfirm(e.target.value)}
+                  />
+                  <button
+                    className="auth-password-toggle"
+                    type="button"
+                    aria-label={showConfirm ? 'Hide confirmation password' : 'Show confirmation password'}
+                    aria-pressed={showConfirm}
+                    onClick={() => setShowConfirm((visible) => !visible)}
+                  >
+                    {showConfirm ? (
+                      <EyeOff size={18} aria-hidden="true" />
+                    ) : (
+                      <Eye size={18} aria-hidden="true" />
+                    )}
+                  </button>
+                </div>
+                {passwordMismatch && (
+                  <p className="form-error password-mismatch" id="password-mismatch-error" role="alert">
+                    Passwords do not match.
+                  </p>
+                )}
+              </div>
             </>
           )}
           {error && (
