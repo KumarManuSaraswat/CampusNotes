@@ -8,6 +8,7 @@ import { storage } from '../storage/cloudinary.js';
 import { prepareDocument, type DocumentMimeType } from './document/prepareDocument.js';
 import { extractVisualText } from './vision/visionAnalyzer.js';
 import { assessStudyContent, studyAssessmentSchema } from './classification/studyGate.js';
+import { analysisFailure, type AnalysisStage } from './analysisFailure.js';
 
 const activeActors = new Set<string>();
 export function aiAvailable() {
@@ -22,12 +23,13 @@ export function gateDto(note: any): StudyGateResult {
     assessment: note.studyAssessment ?? null,
     reviewRequestedAt: note.reviewRequestedAt?.toISOString() ?? null,
     reviewMessage: note.reviewMessage || '',
+    processingError: note.studyGateStatus === 'failed' ? (note.processingError ?? null) : null,
   };
 }
 export async function ownedNote(noteId: string, actorId: string) {
   if (!mongoose.isValidObjectId(noteId))
     throw new HttpError(400, 'VALIDATION_ERROR', 'Invalid note identifier.');
-  const note = await Note.findById(noteId);
+  const note = await Note.findById(noteId).select('+processingError');
   if (!note) throw new HttpError(404, 'NOT_FOUND', 'Note not found.');
   if (String(note.uploadedBy) !== actorId)
     throw new HttpError(403, 'FORBIDDEN', 'Only the uploader can manage analysis.');
@@ -102,6 +104,7 @@ export async function processStudyNote(noteId: string, actorId: string) {
       studyGateInputVersion: note.studyGateInputVersion,
       processingStatus: 'pending',
     };
+    let stage: AnalysisStage = 'storage';
     try {
       const bytes = await storage.read(
         {
@@ -112,12 +115,15 @@ export async function processStudyNote(noteId: string, actorId: string) {
         note.fileType,
       );
       const mimeType = note.fileType as DocumentMimeType;
+      stage = 'document';
       const prepared = await prepareDocument({ bytes, mimeType }, { timeoutMs: 10_000 });
+      stage = 'vision';
       const extracted =
         prepared.status === 'vision_required'
           ? await extractVisualText({ bytes, mimeType }, { timeoutMs: 15_000 })
           : { text: prepared.text, warnings: [] };
       // Reading warnings indicate incomplete evidence. Never classify that subset as the whole file.
+      stage = 'classification';
       const assessment = studyAssessmentSchema.parse(
         extracted.warnings.length
           ? {
@@ -162,6 +168,9 @@ export async function processStudyNote(noteId: string, actorId: string) {
       return gateDto(saved);
     } catch (error) {
       if (error instanceof HttpError) throw error;
+      const failure = analysisFailure(stage, error);
+      // Never log provider messages, signed URLs, document content or credentials.
+      console.warn('Study analysis failed', { attemptId, stage, code: failure.code });
       const saved = await Note.findOneAndUpdate(
         attempt,
         {
@@ -169,14 +178,14 @@ export async function processStudyNote(noteId: string, actorId: string) {
             processingStatus: 'failed',
             studyGateStatus: 'failed',
             studyAssessment: null,
-            processingError: 'The analysis could not finish. Your original upload is retained.',
+            processingError: failure.message,
             studyGateAttemptId: null,
             studyGateExpiresAt: null,
             lastProcessedAt: new Date(),
           },
         },
         { new: true },
-      );
+      ).select('+processingError');
       if (!saved)
         throw new HttpError(
           409,

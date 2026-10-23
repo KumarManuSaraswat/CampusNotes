@@ -55,6 +55,7 @@ export interface NoteDto {
   studyAssessment: StudyAssessment | null;
   reviewRequestedAt: string | null;
   reviewMessage: string;
+  processingError?: string | null;
   metadataSource: MetadataSource;
   upvoteCount: number;
   downvoteCount: number;

@@ -81,13 +81,22 @@ describe('Upload form', () => {
     vi.mocked(processStudyNote)
       .mockRejectedValueOnce(new Error('Provider unavailable'))
       .mockResolvedValueOnce(result('approved'));
-    vi.mocked(getStudyGateStatus).mockResolvedValue(result('failed'));
+    vi.mocked(getStudyGateStatus).mockResolvedValue({
+      ...result('failed'),
+      processingError: '[classification/MODEL_UNAVAILABLE] Check the configured model.',
+    });
     setup();
     select();
     fireEvent.click(screen.getByRole('button', { name: 'Upload & check notes' }));
+    expect(
+      await screen.findByText('[classification/MODEL_UNAVAILABLE] Check the configured model.'),
+    ).toBeTruthy();
     fireEvent.click(await screen.findByRole('button', { name: 'Retry analysis' }));
     await waitFor(() => expect(screen.getByText('Study material detected')).toBeTruthy());
     expect(uploadNote).toHaveBeenCalledTimes(1);
     expect(processStudyNote).toHaveBeenCalledTimes(2);
+    expect(
+      screen.queryByText('[classification/MODEL_UNAVAILABLE] Check the configured model.'),
+    ).toBeNull();
   });
 });

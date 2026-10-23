@@ -83,6 +83,10 @@ async function dto(note: any, userId?: string) {
     studyAssessment: note.studyAssessment ?? null,
     reviewRequestedAt: note.reviewRequestedAt?.toISOString() ?? null,
     reviewMessage: note.reviewMessage || '',
+    processingError:
+      userId === String(owner ? owner.id : note.uploadedBy) && note.studyGateStatus === 'failed'
+        ? (note.processingError ?? null)
+        : undefined,
     metadataSource: note.metadataSource,
     upvoteCount: note.upvoteCount,
     downvoteCount: note.downvoteCount,
@@ -95,7 +99,9 @@ async function dto(note: any, userId?: string) {
   };
 }
 async function getNote(id: string) {
-  const note = await Note.findById(validId(id)).populate('uploadedBy', 'name');
+  const note = await Note.findById(validId(id))
+    .select('+processingError')
+    .populate('uploadedBy', 'name');
   if (!note) throw new HttpError(404, 'NOT_FOUND', 'Note not found.');
   return note;
 }
@@ -317,6 +323,7 @@ export function noteRoutes(router: Router) {
     requireAuth,
     wrap(async (req, res) => {
       const notes = await Note.find({ uploadedBy: req.actor!.id })
+        .select('+processingError')
         .sort({ createdAt: -1 })
         .populate('uploadedBy', 'name');
       ok(res, await Promise.all(notes.map((n) => dto(n, req.actor!.id))));
