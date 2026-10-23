@@ -16,7 +16,7 @@ export interface StoredFile {
 export interface StorageAdapter {
   upload(buffer: Buffer, mime: string): Promise<StoredFile>;
   remove(file: StoredFile): Promise<void>;
-  read(file: StoredFile, mime: string): Promise<Buffer>;
+  read(file: StoredFile, mime: string, maxBytes?: number): Promise<Buffer>;
 }
 export const storage: StorageAdapter = {
   upload(buffer, mime) {
@@ -50,7 +50,7 @@ export const storage: StorageAdapter = {
       invalidate: true,
     });
   },
-  async read(file, mime) {
+  async read(file, mime, maxBytes = env.MAX_FILE_MB * 1024 * 1024) {
     const format = mime === 'application/pdf' ? 'pdf' : mime === 'image/jpeg' ? 'jpg' : 'png';
     const url = cloudinary.utils.private_download_url(file.storagePublicId, format, {
       resource_type: file.storageResourceType,
@@ -63,7 +63,6 @@ export const storage: StorageAdapter = {
     const response = await fetch(parsed, { signal: AbortSignal.timeout(20_000) });
     if (!response.ok || !response.body)
       throw new Error(`Cloudinary original download failed with status ${response.status}.`);
-    const maxBytes = env.MAX_FILE_MB * 1024 * 1024;
     const declaredSize = Number(response.headers.get('content-length'));
     if (Number.isFinite(declaredSize) && declaredSize > maxBytes)
       throw new Error('Stored original exceeds the configured limit.');

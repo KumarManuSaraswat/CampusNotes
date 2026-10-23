@@ -1,4 +1,26 @@
 import mongoose, { Schema } from 'mongoose';
+const noteAssetSchema = new Schema(
+  {
+    id: { type: String, required: true },
+    originalFilename: { type: String, required: true },
+    storagePublicId: { type: String, required: true },
+    storageResourceType: { type: String, enum: ['raw', 'image'], required: true },
+    mimeType: { type: String, required: true },
+    fileSize: { type: Number, required: true },
+    uploadIndex: { type: Number, required: true },
+    confirmedPosition: { type: Number, default: null },
+    inputVersion: { type: Number, default: 1 },
+    extractionStatus: {
+      type: String,
+      enum: ['pending', 'completed', 'failed'],
+      default: 'pending',
+    },
+    extractedText: { type: String, default: null },
+    extractionWarnings: { type: [String], default: [] },
+    usedVision: { type: Boolean, default: false },
+  },
+  { _id: false },
+);
 const noteSchema = new Schema(
   {
     title: { type: String, required: true, maxlength: 160 },
@@ -15,6 +37,37 @@ const noteSchema = new Schema(
     lectureDate: { type: Date, default: null },
     semester: { type: String, default: '' },
     uploadedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    // Old single-file documents have no assets field and keep their existing visibility policy.
+    assets: { type: [noteAssetSchema], default: undefined },
+    submissionKey: { type: String, default: undefined },
+    submissionDigest: { type: String, default: undefined, select: false },
+    publicationStatus: {
+      type: String,
+      enum: ['draft', 'published'],
+      default: 'draft',
+      index: true,
+    },
+    publishedAt: { type: Date, default: null },
+    orderConfirmedAt: { type: Date, default: null },
+    aiPageOrder: { type: Schema.Types.Mixed, default: null },
+    orderAttemptId: { type: String, default: null, select: false },
+    orderExpiresAt: { type: Date, default: null },
+    processingStage: { type: String, default: 'upload' },
+    processingEvents: {
+      type: [{ step: String, status: String, at: Date, message: String }],
+      default: [],
+    },
+    studySummary: { type: String, default: '' },
+    aiStudySummary: { type: String, default: '' },
+    summarySources: {
+      type: [{ text: String, sourceAssetId: String, excerpt: String }],
+      default: [],
+    },
+    summaryAttemptId: { type: String, default: null, select: false },
+    summaryExpiresAt: { type: Date, default: null },
+    generatedPdf: { type: Schema.Types.Mixed, default: null },
+    pdfGenerationAttemptId: { type: String, default: null, select: false },
+    pdfGenerationExpiresAt: { type: Date, default: null },
     aiMetadata: { type: Schema.Types.Mixed, default: null },
     studyGateStatus: {
       type: String,
@@ -59,4 +112,8 @@ noteSchema.index({
 noteSchema.index({ createdAt: -1 });
 noteSchema.index({ score: -1, createdAt: -1 });
 noteSchema.index({ subject: 1, createdAt: -1 });
+noteSchema.index(
+  { uploadedBy: 1, submissionKey: 1 },
+  { unique: true, partialFilterExpression: { submissionKey: { $type: 'string' } } },
+);
 export const Note = mongoose.model('Note', noteSchema);

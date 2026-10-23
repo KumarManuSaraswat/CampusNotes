@@ -7,6 +7,7 @@ export function mergeGate(note: NoteDto, result: StudyGateResult): NoteDto {
   return {
     ...note,
     processingStatus: result.processingStatus,
+    processingStage: result.processingStage ?? note.processingStage,
     studyGateStatus: result.studyGateStatus,
     studyAssessment: result.assessment,
     reviewRequestedAt: result.reviewRequestedAt ?? null,
