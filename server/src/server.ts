@@ -1,0 +1,12 @@
+import mongoose from 'mongoose';
+import app from './app.js';
+import { readEnv } from './config/env.js';
+import { User } from './models/User.js';
+import { Note } from './models/Note.js';
+import { Vote } from './models/Vote.js';
+import { NoteRequest } from './models/NoteRequest.js';
+import { Report } from './models/Report.js';
+const env = readEnv();
+await mongoose.connect(env.MONGODB_URI);
+await Promise.all([User.init(), Note.init(), Vote.init(), NoteRequest.init(), Report.init()]);
+app.listen(env.PORT, () => console.log(`CampusNotes API on ${env.PORT}`));

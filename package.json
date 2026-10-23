@@ -1,0 +1,26 @@
+{
+  "name": "campusnotes",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:client": "npm run dev -w client",
+    "dev:server": "npm run dev -w server",
+    "typecheck": "npm run typecheck -w shared && npm run typecheck -w server && npm run typecheck -w client",
+    "lint": "npm run lint -w server && npm run lint -w client",
+    "test": "npm run test -w server && npm run test -w client",
+    "build": "npm run build -w shared && npm run build -w server && npm run build -w client",
+    "seed": "npm run seed -w server",
+    "format": "prettier --write \"client/src/**/*.{ts,tsx,css}\" \"server/src/**/*.ts\" \"shared/src/**/*.ts\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0"
+  }
+}
