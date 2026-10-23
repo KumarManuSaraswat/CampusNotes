@@ -85,7 +85,8 @@ export async function processStudyNote(noteId: string, actorId: string) {
           studyAssessment: null,
           processingError: null,
           studyGateAttemptId: attemptId,
-          studyGateExpiresAt: new Date(Date.now() + 180_000),
+          // Allows one vision retry at its 60s timeout plus classification and I/O time.
+          studyGateExpiresAt: new Date(Date.now() + 240_000),
           reviewMessage: '',
         },
         $inc: { studyGateInputVersion: 1 },
@@ -120,7 +121,7 @@ export async function processStudyNote(noteId: string, actorId: string) {
       stage = 'vision';
       const extracted =
         prepared.status === 'vision_required'
-          ? await extractVisualText({ bytes, mimeType }, { timeoutMs: 15_000 })
+          ? await extractVisualText({ bytes, mimeType })
           : { text: prepared.text, warnings: [] };
       // Reading warnings indicate incomplete evidence. Never classify that subset as the whole file.
       stage = 'classification';
@@ -137,7 +138,6 @@ export async function processStudyNote(noteId: string, actorId: string) {
             }
           : await assessStudyContent(
               { extractedText: extracted.text ?? '', originalFilename: note.originalFilename },
-              { timeoutMs: 15_000 },
             ),
       );
       const gate = { academic: 'approved', non_academic: 'rejected', review: 'needs_review' }[

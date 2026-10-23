@@ -95,7 +95,7 @@ export const TRANSCRIPTION_INSTRUCTION = [
 // Keep base64 bytes + prompt below the Gemini GenerateContent 20 MiB inline request guidance.
 const MAX_INLINE_BYTES = 14 * 1024 * 1024;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 60_000;
 const RETRY_DELAY_MS = 200;
 const supportedMimeTypes = new Set<string>(['image/jpeg', 'image/png', 'application/pdf']);
 

@@ -174,7 +174,7 @@ function getConfiguration(
   if (!model || (!apiKey && !options.client)) throw new StudyGateError('CONFIG_MISSING');
 
   const timeoutMs =
-    options.timeoutMs ?? numericSetting(env.STUDY_GATE_TIMEOUT_MS, 30_000, 1000, 120_000);
+    options.timeoutMs ?? numericSetting(env.STUDY_GATE_TIMEOUT_MS, 60_000, 1000, 120_000);
   const maxInputChars =
     options.maxInputChars ?? numericSetting(env.STUDY_GATE_MAX_INPUT_CHARS, 100_000, 1000, 500_000);
   if (
