@@ -1,0 +1,278 @@
+import type { Router } from 'express';
+import mongoose from 'mongoose';
+import multer from 'multer';
+import { fileTypeFromBuffer } from 'file-type';
+import { z } from 'zod';
+import { lectureDateSchema, metadataSchema } from '@campusnotes/shared';
+import { Note } from '../models/Note.js';
+import { Vote } from '../models/Vote.js';
+import { Report } from '../models/Report.js';
+import { NoteRequest } from '../models/NoteRequest.js';
+import { requireAuth, optionalAuth } from '../middleware/auth.js';
+import { storage } from '../services/storage/cloudinary.js';
+import { HttpError, ok, wrap } from '../utils/http.js';
+import { readEnv } from '../config/env.js';
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: readEnv().MAX_FILE_MB * 1024 * 1024, files: 1 },
+});
+const allowed = new Set(['application/pdf', 'image/jpeg', 'image/png']);
+const validId = (id: string) => {
+  if (!mongoose.isValidObjectId(id))
+    throw new HttpError(400, 'VALIDATION_ERROR', 'Invalid note identifier.');
+  return id;
+};
+const readable = (name: string) =>
+  name
+    .replace(/\.[^.]+$/, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160) || 'Untitled notes';
+const fileName = (name: string) =>
+  name
+    .split(/[\\/]/)
+    .pop()
+    ?.replace(/[\x00-\x1f\x7f]/g, '')
+    .slice(0, 180) || 'notes';
+const metadataInput = (body: Record<string, unknown>) =>
+  metadataSchema.parse({
+    ...body,
+    tags:
+      typeof body.tags === 'string'
+        ? body.tags
+            .split(',')
+            .map((x) => x.trim())
+            .filter(Boolean)
+        : body.tags,
+    lectureDate: body.lectureDate === '' ? null : body.lectureDate,
+  });
+async function dto(note: any, userId?: string) {
+  const owner =
+    note.uploadedBy && typeof note.uploadedBy === 'object' && note.uploadedBy.name
+      ? note.uploadedBy
+      : null;
+  const vote = userId ? await Vote.findOne({ note: note._id, user: userId }) : null;
+  return {
+    id: String(note.id),
+    title: note.title,
+    description: note.description,
+    originalFilename: note.originalFilename,
+    fileType: note.fileType,
+    fileSize: note.fileSize,
+    subject: note.subject,
+    tags: note.tags,
+    instructor: note.instructor,
+    lectureDate: note.lectureDate?.toISOString().slice(0, 10) || null,
+    semester: note.semester,
+    uploadedBy: { id: String(owner ? owner.id : note.uploadedBy), name: owner?.name || 'Student' },
+    processingStatus: note.processingStatus,
+    metadataSource: note.metadataSource,
+    upvoteCount: note.upvoteCount,
+    downvoteCount: note.downvoteCount,
+    score: note.score,
+    myVote: vote?.value || 0,
+    createdAt: note.createdAt,
+    updatedAt: note.updatedAt,
+    previewUrl: `/notes/${note.id}/file`,
+    downloadUrl: `/notes/${note.id}/file?download=1`,
+  };
+}
+async function getNote(id: string) {
+  const note = await Note.findById(validId(id)).populate('uploadedBy', 'name');
+  if (!note) throw new HttpError(404, 'NOT_FOUND', 'Note not found.');
+  return note;
+}
+const filterSchema = z.object({
+  q: z.string().max(100).optional(),
+  subject: z.string().max(100).optional(),
+  tag: z.string().max(40).optional(),
+  instructor: z.string().max(100).optional(),
+  date: lectureDateSchema.optional(),
+  sort: z.enum(['recent', 'score']).default('recent'),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(30).default(12),
+});
+const escaped = (s: string) =>
+  Array.from(s)
+    .map((ch) => ('\\^$.*+?()[]{}|'.includes(ch) ? '\\' + ch : ch))
+    .join('');
+export function noteRoutes(router: Router) {
+  router.post(
+    '/notes',
+    requireAuth,
+    upload.single('file'),
+    wrap(async (req, res) => {
+      if (!req.file) throw new HttpError(400, 'FILE_REQUIRED', 'Choose a PDF, JPG, or PNG file.');
+      const detected = await fileTypeFromBuffer(req.file.buffer);
+      const extension = req.file.originalname.toLowerCase().match(/\.[^.]+$/)?.[0];
+      const validExtension =
+        detected?.mime === 'application/pdf'
+          ? extension === '.pdf'
+          : detected?.mime === 'image/png'
+            ? extension === '.png'
+            : extension === '.jpg' || extension === '.jpeg';
+      const declaredTypeAllowed =
+        !req.file.mimetype ||
+        req.file.mimetype === 'application/octet-stream' ||
+        detected?.mime === req.file.mimetype;
+      if (!detected || !allowed.has(detected.mime) || !declaredTypeAllowed || !validExtension)
+        throw new HttpError(
+          400,
+          'INVALID_FILE',
+          'The file content and extension must be a PDF, JPG, or PNG.',
+        );
+      const data = metadataInput(req.body);
+      const originalFilename = fileName(req.file.originalname);
+      let stored;
+      try {
+        stored = await storage.upload(req.file.buffer, detected.mime);
+      } catch {
+        throw new HttpError(503, 'STORAGE_ERROR', 'Upload failed. Please retry in a moment.');
+      }
+      try {
+        const note = await Note.create({
+          ...data,
+          title: data.title || readable(originalFilename),
+          originalFilename,
+          fileType: detected.mime,
+          fileSize: req.file.size,
+          ...stored,
+          uploadedBy: req.actor!.id,
+          metadataSource: Object.values(data).some((x) => (Array.isArray(x) ? x.length : !!x))
+            ? 'manual'
+            : 'filename',
+        });
+        await note.populate('uploadedBy', 'name');
+        ok(res, await dto(note, req.actor!.id), 'Note uploaded.', 201);
+      } catch (error) {
+        await storage.remove(stored).catch(() => {});
+        throw error;
+      }
+    }),
+  );
+  router.get(
+    '/notes',
+    wrap(async (req, res) => {
+      const f = filterSchema.parse(req.query);
+      const query: any = {};
+      if (f.q) query.$text = { $search: f.q };
+      if (f.subject) query.subject = new RegExp(escaped(f.subject), 'i');
+      if (f.tag) query.tags = new RegExp(escaped(f.tag), 'i');
+      if (f.instructor) query.instructor = new RegExp(escaped(f.instructor), 'i');
+      if (f.date) {
+        const start = new Date(f.date + 'T00:00:00.000Z');
+        query.lectureDate = { $gte: start, $lt: new Date(start.getTime() + 86400000) };
+      }
+      const [notes, total] = await Promise.all([
+        Note.find(query)
+          .sort(f.sort === 'score' ? { score: -1, createdAt: -1 } : { createdAt: -1 })
+          .skip((f.page - 1) * f.limit)
+          .limit(f.limit)
+          .populate('uploadedBy', 'name'),
+        Note.countDocuments(query),
+      ]);
+      ok(res, {
+        items: await Promise.all(notes.map((n) => dto(n))),
+        total,
+        page: f.page,
+        pages: Math.ceil(total / f.limit),
+      });
+    }),
+  );
+  router.get(
+    '/users/me/notes',
+    requireAuth,
+    wrap(async (req, res) => {
+      const notes = await Note.find({ uploadedBy: req.actor!.id })
+        .sort({ createdAt: -1 })
+        .populate('uploadedBy', 'name');
+      ok(res, await Promise.all(notes.map((n) => dto(n, req.actor!.id))));
+    }),
+  );
+  router.get(
+    '/notes/:id',
+    optionalAuth,
+    wrap(async (req, res) => ok(res, await dto(await getNote(req.params.id), req.actor?.id))),
+  );
+  router.get(
+    '/notes/:id/file',
+    wrap(async (req, res) => {
+      const note = await getNote(req.params.id);
+      const url = storage.deliveryUrl(
+        {
+          storagePublicId: note.storagePublicId,
+          storageResourceType: note.storageResourceType as 'raw' | 'image',
+          storageProvider: 'cloudinary',
+        },
+        req.query.download === '1',
+      );
+      res.redirect(302, url);
+    }),
+  );
+  router.patch(
+    '/notes/:id',
+    requireAuth,
+    wrap(async (req, res) => {
+      const note = await getNote(req.params.id);
+      if (String(note.uploadedBy._id) !== req.actor!.id)
+        throw new HttpError(403, 'FORBIDDEN', 'Only the uploader can edit this note.');
+      const data = metadataInput({
+        title: note.title,
+        subject: note.subject,
+        tags: note.tags,
+        instructor: note.instructor,
+        lectureDate: note.lectureDate?.toISOString().slice(0, 10) || null,
+        semester: note.semester,
+        description: note.description,
+        ...req.body,
+      });
+      Object.assign(note, data, {
+        title: data.title || readable(note.originalFilename),
+        lectureDate: data.lectureDate ? new Date(data.lectureDate) : null,
+        metadataSource: 'manual',
+      });
+      await note.save();
+      ok(res, await dto(note, req.actor!.id), 'Note updated.');
+    }),
+  );
+  router.delete(
+    '/notes/:id',
+    requireAuth,
+    wrap(async (req, res) => {
+      const note = await getNote(req.params.id);
+      if (String(note.uploadedBy._id) !== req.actor!.id)
+        throw new HttpError(403, 'FORBIDDEN', 'Only the uploader can delete this note.');
+      if (await NoteRequest.exists({ fulfilledNote: note.id, status: 'fulfilled' }))
+        throw new HttpError(
+          409,
+          'NOTE_IN_USE',
+          'This note fulfills a request and cannot be deleted.',
+        );
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          await Note.deleteOne({ _id: note.id }, { session });
+          await Vote.deleteMany({ note: note.id }, { session });
+          await Report.deleteMany({ note: note.id }, { session });
+        });
+      } finally {
+        await session.endSession();
+      }
+      await storage
+        .remove({
+          storagePublicId: note.storagePublicId,
+          storageResourceType: note.storageResourceType as 'raw' | 'image',
+          storageProvider: 'cloudinary',
+        })
+        .catch((e) => console.error('Storage cleanup failed', e));
+      ok(res, null, 'Note deleted.');
+    }),
+  );
+  router.post('/notes/:id/ai-process', requireAuth, (_req, res) =>
+    res.status(501).json({
+      success: false,
+      error: { code: 'AI_NOT_CONFIGURED', message: 'AI organization is not configured yet.' },
+    }),
+  );
+}

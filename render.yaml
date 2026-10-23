@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: campusnotes-api
+    runtime: node
+    buildCommand: npm ci && npm run build -w shared && npm run build -w server
+    startCommand: npm run start -w server
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AI_ENABLED
+        value: 'false'
+      - key: MAX_FILE_MB
+        value: '10'
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MONGODB_URI
+        sync: false
+      - key: CLIENT_URL
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
