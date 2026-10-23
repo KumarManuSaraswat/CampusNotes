@@ -1,6 +1,16 @@
+
 {
   "version": 2,
   "buildCommand": "npm run build -w shared && npm run build -w client",
   "outputDirectory": "client/dist",
-  "rewrites": [{ "source": "/((?!assets/).*)", "destination": "/index.html" }]
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://campusnotes-api-zq92.onrender.com/api/:path*"
+    },
+    {
+      "source": "/((?!assets/).*)",
+      "destination": "/index.html"
+    }
+  ]
 }
