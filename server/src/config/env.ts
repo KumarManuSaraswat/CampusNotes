@@ -17,6 +17,8 @@ const schema = z.object({
   GROQ_VISION_MODEL: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().optional(),
+  GEMINI_RECOMMENDATION_MODEL: z.string().optional(),
+  REQUEST_RECOMMENDATIONS_ENABLED: z.enum(['true', 'false']).default('true'),
   AI_MAX_CONCURRENT: z.coerce.number().int().min(1).max(8).default(2),
 });
 export function readEnv() {

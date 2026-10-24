@@ -5,6 +5,7 @@ import request from 'supertest';
 import { Note } from '../models/Note.js';
 import { User } from '../models/User.js';
 import { Bookmark } from '../models/Bookmark.js';
+import { NoteRequest } from '../models/NoteRequest.js';
 import jwt from 'jsonwebtoken';
 import { PDFDocument } from 'pdf-lib';
 const {
@@ -16,6 +17,7 @@ const {
   mockSuggestSummary,
   mockSuggestOrder,
   mockGeneratedPdf,
+  mockRecommendNotes,
 } = vi.hoisted(() => ({
   mockStorageRead: vi.fn(),
   mockPrepare: vi.fn(),
@@ -25,6 +27,7 @@ const {
   mockSuggestSummary: vi.fn(),
   mockSuggestOrder: vi.fn(),
   mockGeneratedPdf: { bytes: null as Buffer | null },
+  mockRecommendNotes: vi.fn(),
 }));
 const { mockStorageUploadHook, mockStorageRemove } = vi.hoisted(() => ({
   mockStorageUploadHook: vi.fn(),
@@ -39,6 +42,10 @@ vi.mock('../services/ai/classification/studyGate.js', async (original) => ({
 vi.mock('../services/ai/suggestMetadata.js', () => ({ suggestMetadata: mockSuggestMetadata }));
 vi.mock('../services/ai/suggestSummary.js', () => ({ suggestSummary: mockSuggestSummary }));
 vi.mock('../services/ai/suggestPageOrder.js', () => ({ suggestPageOrder: mockSuggestOrder }));
+vi.mock('../services/ai/recommendRequestNotes.js', async (original) => ({
+  ...(await original<typeof import('../services/ai/recommendRequestNotes.js')>()),
+  recommendRequestNotes: mockRecommendNotes,
+}));
 
 vi.mock('../services/storage/cloudinary.js', () => ({
   storage: {
@@ -153,6 +160,7 @@ afterAll(async () => {
   await mongo?.stop();
 });
 beforeEach(async () => {
+  mockRecommendNotes.mockReset().mockResolvedValue([]);
   mockGeneratedPdf.bytes = null;
   mockStorageUploadHook.mockReset().mockResolvedValue(undefined);
   mockStorageRemove.mockReset().mockResolvedValue(undefined);
@@ -250,6 +258,177 @@ async function privateNote(user: any, extra: Record<string, unknown> = {}) {
     ...extra,
   });
 }
+
+describe('Existing-note request recommendations', () => {
+  async function setup() {
+    const requester = await actor(),
+      author = await actor();
+    const note = await privateNote(author, {
+      title: 'SQL joins study notes',
+      subject: 'Databases',
+      studyGateStatus: 'approved',
+      publicationStatus: 'published',
+    });
+    const response = await hit('post', '/requests', requester).send({
+      title: 'SQL joins',
+      subject: 'Databases',
+    });
+    const requestId = response.body.data.id;
+    mockRecommendNotes.mockResolvedValue([
+      { noteId: note.id, reason: 'Covers SQL joins.', evidence: 'SQL joins' },
+    ]);
+    return { requester, author, note, requestId };
+  }
+  it('offers public notes, caches results, and resolves only after explicit requester acceptance', async () => {
+    const { requester, author, note, requestId } = await setup();
+    await privateNote(author, { title: 'SQL joins private', subject: 'Databases' });
+    await privateNote(author, {
+      title: 'SQL joins draft',
+      subject: 'Databases',
+      studyGateStatus: 'approved',
+      assets: [],
+      publicationStatus: 'draft',
+    });
+    await privateNote(requester, {
+      title: 'SQL joins own note',
+      subject: 'Databases',
+      studyGateStatus: 'approved',
+      publicationStatus: 'published',
+    });
+    const suggestions = await hit('post', `/requests/${requestId}/recommendations`, requester);
+    expect(suggestions.status).toBe(200);
+    expect(suggestions.body.data.recommendations.map((n: any) => n.noteId)).toEqual([note.id]);
+    expect(mockRecommendNotes.mock.calls[0][1].map((n: any) => n.noteId)).toEqual([note.id]);
+    expect(await NoteRequest.findById(requestId)).toMatchObject({ status: 'open' });
+    await hit('post', `/requests/${requestId}/recommendations`, requester);
+    expect(mockRecommendNotes).toHaveBeenCalledTimes(1);
+    const accept = () =>
+      hit('patch', `/requests/${requestId}/accept-recommendation`, requester).send({
+        noteId: note.id,
+      });
+    const concurrentAccepts = await Promise.all([accept(), accept()]);
+    expect(concurrentAccepts.map((response) => response.body.data.status)).toEqual([
+      'fulfilled',
+      'fulfilled',
+    ]);
+    expect((await accept()).status).toBe(200);
+    const saved = await NoteRequest.findById(requestId);
+    expect(String(saved!.fulfilledBy)).toBe(String(author.id));
+    expect(String(saved!.acceptedRecommendationBy)).toBe(String(requester.id));
+    expect(String(saved!.fulfilledNote)).toBe(note.id);
+    expect((await hit('get', '/requests?status=fulfilled')).body.data[0].fulfilledNote.id).toBe(
+      note.id,
+    );
+  });
+  it('rejects anonymous users, other students and arbitrary note IDs', async () => {
+    const { requester, author, note, requestId } = await setup();
+    expect((await hit('post', `/requests/${requestId}/recommendations`)).status).toBe(401);
+    expect((await hit('post', `/requests/${requestId}/recommendations`, author)).status).toBe(403);
+    expect(
+      (
+        await hit('patch', `/requests/${requestId}/accept-recommendation`, author).send({
+          noteId: note.id,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await hit('patch', `/requests/${requestId}/accept-recommendation`, requester).send({
+          noteId: note.id,
+        })
+      ).body.error.code,
+    ).toBe('NOT_RECOMMENDED');
+    expect(
+      (
+        await hit('patch', `/requests/${requestId}/accept-recommendation`, requester).send({
+          noteId: 'invalid',
+        })
+      ).status,
+    ).toBe(400);
+  });
+  it('keeps requests open on no match or provider failure', async () => {
+    const { requester, requestId } = await setup();
+    mockRecommendNotes.mockResolvedValueOnce([]);
+    expect(
+      (await hit('post', `/requests/${requestId}/recommendations`, requester)).body.data
+        .recommendations,
+    ).toEqual([]);
+    expect((await NoteRequest.findById(requestId))!.status).toBe('open');
+    const other = await setup();
+    const { HttpError } = await import('../utils/http.js');
+    mockRecommendNotes.mockRejectedValueOnce(
+      new HttpError(503, 'RECOMMENDATIONS_QUOTA', 'Suggestions quota reached.'),
+    );
+    expect(
+      (await hit('post', `/requests/${other.requestId}/recommendations`, other.requester)).body
+        .error.code,
+    ).toBe('RECOMMENDATIONS_QUOTA');
+    expect((await NoteRequest.findById(other.requestId))!.status).toBe('open');
+    expect(
+      (await hit('post', `/requests/${other.requestId}/recommendations`, other.requester)).status,
+    ).toBe(429);
+  });
+  it('filters removed or newly private cached suggestions and refuses stale acceptance', async () => {
+    const { requester, note, requestId } = await setup();
+    await hit('post', `/requests/${requestId}/recommendations`, requester);
+    await Note.updateOne({ _id: note.id }, { $set: { studyGateStatus: 'rejected' } });
+    expect(
+      (await hit('post', `/requests/${requestId}/recommendations`, requester)).body.data
+        .recommendations,
+    ).toEqual([]);
+    expect(
+      (
+        await hit('patch', `/requests/${requestId}/accept-recommendation`, requester).send({
+          noteId: note.id,
+        })
+      ).body.error.code,
+    ).toBe('NOTE_UNAVAILABLE');
+    expect((await NoteRequest.findById(requestId))!.status).toBe('open');
+  });
+  it('discards suggestions when a classmate fulfills the request during the Gemini call', async () => {
+    const { requester, author, note, requestId } = await setup();
+    let release!: (matches: unknown[]) => void;
+    mockRecommendNotes.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const pending = hit('post', `/requests/${requestId}/recommendations`, requester).then(
+      (response) => response,
+    );
+    await vi.waitFor(() => expect(mockRecommendNotes).toHaveBeenCalledTimes(1));
+    try {
+      expect(
+        (await hit('patch', `/requests/${requestId}/fulfill`, author).send({ noteId: note.id }))
+          .status,
+      ).toBe(200);
+    } finally {
+      release([{ noteId: note.id, reason: 'Covers SQL joins.', evidence: 'SQL joins' }]);
+    }
+    expect((await pending).status).toBe(409);
+    const saved = await NoteRequest.findById(requestId);
+    expect(saved!.status).toBe('fulfilled');
+    expect(saved!.recommendations).toHaveLength(0);
+  });
+  it('does not overwrite another fulfillment when an old recommendation is accepted', async () => {
+    const { requester, author, note, requestId } = await setup();
+    await hit('post', `/requests/${requestId}/recommendations`, requester);
+    const different = await privateNote(author, {
+      studyGateStatus: 'approved',
+      publicationStatus: 'published',
+    });
+    await hit('patch', `/requests/${requestId}/fulfill`, author).send({ noteId: different.id });
+    expect(
+      (
+        await hit('patch', `/requests/${requestId}/accept-recommendation`, requester).send({
+          noteId: note.id,
+        })
+      ).status,
+    ).toBe(409);
+    expect(String((await NoteRequest.findById(requestId))!.fulfilledNote)).toBe(different.id);
+  });
+});
 
 describe('Study gate integration and publication boundaries', () => {
   it('fails closed for every nonapproved status across discovery, detail, file and contributions', async () => {

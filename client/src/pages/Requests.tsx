@@ -1,9 +1,17 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { MessageSquareText, Plus, CheckCircle2 } from 'lucide-react';
-import type { NoteDto } from '@campusnotes/shared';
+import {
+  MessageSquareText,
+  Plus,
+  CheckCircle2,
+  Sparkles,
+  ArrowUpRight,
+  Search,
+} from 'lucide-react';
+import type { NoteDto, RequestRecommendationsResult } from '@campusnotes/shared';
+import './requestRecommendations.css';
 import type { NoteRequest } from '../types';
-import { api, json } from '../services/api';
+import { api, json, type ApiError } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 export function Requests() {
@@ -22,17 +30,33 @@ export function Requests() {
   const [matchConfirmed, setMatchConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [suggestions, setSuggestions] = useState<
+    Record<
+      string,
+      {
+        status: 'loading' | 'ready' | 'error';
+        data?: RequestRecommendationsResult;
+        error?: string;
+      }
+    >
+  >({});
+  const [accepting, setAccepting] = useState<string | null>(null);
+  const [resolved, setResolved] = useState<{ noteId: string; title: string } | null>(null);
+  const loadSequence = useRef(0);
   const { user } = useAuth();
   const toast = useToast();
-  async function load() {
+  async function load(filter = status) {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     try {
-      setItems(await api<NoteRequest[]>('/requests?status=' + status));
+      const result = await api<NoteRequest[]>('/requests?status=' + filter);
+      if (sequence !== loadSequence.current) return;
+      setItems(result);
       setError('');
     } catch (e) {
-      setError((e as Error).message);
+      if (sequence === loadSequence.current) setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   }
   useEffect(() => {
@@ -50,11 +74,43 @@ export function Requests() {
         )
         .catch(() => {});
   }, [user?.id]);
+  async function checkRecommendations(requestId: string) {
+    setSuggestions((current) => ({ ...current, [requestId]: { status: 'loading' } }));
+    try {
+      const data = await api<RequestRecommendationsResult>(
+        `/requests/${requestId}/recommendations`,
+        json('POST', {}),
+      );
+      setSuggestions((current) => ({ ...current, [requestId]: { status: 'ready', data } }));
+    } catch (e) {
+      setSuggestions((current) => ({
+        ...current,
+        [requestId]: { status: 'error', error: (e as Error).message },
+      }));
+      if ((e as ApiError).code === 'REQUEST_UNAVAILABLE') await load();
+    }
+  }
+  async function acceptRecommendation(requestId: string, noteId: string, noteTitle: string) {
+    setAccepting(requestId);
+    try {
+      await api(`/requests/${requestId}/accept-recommendation`, json('PATCH', { noteId }));
+      setResolved({ noteId, title: noteTitle });
+      setItems((current) => current.filter((item) => item.id !== requestId));
+      toast('Request resolved. Your notes are ready!');
+      await load();
+    } catch (e) {
+      toast((e as Error).message, 'error');
+      if ((e as ApiError).code === 'REQUEST_UNAVAILABLE') await load();
+      if ((e as ApiError).code === 'NOTE_UNAVAILABLE') void checkRecommendations(requestId);
+    } finally {
+      setAccepting(null);
+    }
+  }
   async function create(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     try {
-      await api(
+      const created = await api<{ id: string }>(
         '/requests',
         json('POST', { title, subject, instructor, lectureDate: date || null, description }),
       );
@@ -65,7 +121,10 @@ export function Requests() {
       setInstructor('');
       setDate('');
       setDescription('');
-      await load();
+      setResolved(null);
+      setStatus('open');
+      await load('open');
+      void checkRecommendations(created.id);
     } catch (e) {
       toast((e as Error).message, 'error');
     } finally {
@@ -104,6 +163,17 @@ export function Requests() {
       {!user && (
         <div className="soft-banner">
           <Link to="/login">Log in</Link> to request notes or fulfill a classmate's request.
+        </div>
+      )}
+      {resolved && (
+        <div className="request-resolved-banner" role="status">
+          <CheckCircle2 size={22} aria-hidden="true" />
+          <div>
+            <strong>One less thing to chase. Request resolved!</strong>
+            <Link to={`/notes/${resolved.noteId}`}>
+              Open {resolved.title} <ArrowUpRight size={16} aria-hidden="true" />
+            </Link>
+          </div>
         </div>
       )}
       {showForm && (
@@ -208,6 +278,103 @@ export function Requests() {
                   )}
                 </div>
               </div>
+              {item.status === 'open' &&
+                user?.id === item.createdBy.id &&
+                !suggestions[item.id] && (
+                  <button
+                    className="secondary-button"
+                    onClick={() => void checkRecommendations(item.id)}
+                  >
+                    <Sparkles size={16} aria-hidden="true" /> Find existing notes
+                  </button>
+                )}
+              {item.status === 'open' && user?.id === item.createdBy.id && suggestions[item.id] && (
+                <section
+                  className="request-suggestions"
+                  aria-label={`Existing notes for ${item.title}`}
+                  aria-busy={suggestions[item.id].status === 'loading'}
+                >
+                  <div className="request-suggestions-heading">
+                    <span className="request-spark">
+                      <Sparkles size={20} aria-hidden="true" />
+                    </span>
+                    <div>
+                      <span className="eyebrow">A head start from the library</span>
+                      <h3>Your notes might already be here</h3>
+                    </div>
+                  </div>
+                  {suggestions[item.id].status === 'loading' && (
+                    <p role="status" className="request-searching">
+                      <Search size={17} aria-hidden="true" /> Looking for notes that fit your
+                      request…
+                    </p>
+                  )}
+                  {suggestions[item.id].status === 'error' && (
+                    <div className="request-suggestions-message">
+                      <p role="alert">{suggestions[item.id].error}</p>
+                      <p>Your request remains open for classmates to help.</p>
+                      <button
+                        className="secondary-button small"
+                        onClick={() => void checkRecommendations(item.id)}
+                      >
+                        Try suggestions again
+                      </button>
+                    </div>
+                  )}
+                  {suggestions[item.id].status === 'ready' &&
+                    (suggestions[item.id].data!.recommendations.length ? (
+                      <>
+                        <p className="hint">
+                          Preview a match, then accept it if it covers what you need. Your request
+                          stays open until you choose.
+                        </p>
+                        <div className="request-matches">
+                          {suggestions[item.id].data!.recommendations.map((note) => (
+                            <article className="request-match" key={note.noteId}>
+                              <span className="request-match-subject">
+                                {note.subject || 'Study notes'}
+                              </span>
+                              <h4>{note.title}</h4>
+                              <p>{note.reason}</p>
+                              <blockquote>“{note.evidence}”</blockquote>
+                              <div className="request-match-actions">
+                                <Link
+                                  className="text-link"
+                                  to={`/notes/${note.noteId}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  aria-label={`Preview ${note.title} (opens in a new tab)`}
+                                >
+                                  Preview notes <ArrowUpRight size={15} aria-hidden="true" />
+                                </Link>
+                                <button
+                                  className="button small"
+                                  disabled={accepting !== null}
+                                  onClick={() =>
+                                    void acceptRecommendation(item.id, note.noteId, note.title)
+                                  }
+                                >
+                                  <CheckCircle2 size={16} aria-hidden="true" />
+                                  {accepting === item.id ? 'Resolving…' : 'Accept & resolve'}
+                                </button>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="request-suggestions-message">
+                        <p>No close matches found in this search.</p>
+                        <p>
+                          Your request is still open. Classmates can share their notes with you.
+                        </p>
+                        <Link className="text-link" to="/discover">
+                          Browse the library <ArrowUpRight size={15} aria-hidden="true" />
+                        </Link>
+                      </div>
+                    ))}
+                </section>
+              )}
               {item.status === 'open' && user && user.id !== item.createdBy.id && (
                 <button
                   className="secondary-button"

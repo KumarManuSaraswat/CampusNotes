@@ -11,6 +11,10 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 import { HttpError, ok, wrap } from '../utils/http.js';
 import { reputationFor } from '../services/reputation/index.js';
 import { assertPublic, publicNoteQuery } from '../services/ai/noteVisibility.js';
+import {
+  findRequestRecommendations,
+  acceptRequestRecommendation,
+} from '../services/requestRecommendations.js';
 const id = (s: string) => {
   if (!mongoose.isValidObjectId(s))
     throw new HttpError(400, 'VALIDATION_ERROR', 'Invalid identifier.');
@@ -168,6 +172,25 @@ export function communityRoutes(router: Router) {
         createdBy: req.actor!.id,
       });
       ok(res, { id: String(item.id) }, 'Request created.', 201);
+    }),
+  );
+  router.post(
+    '/requests/:id/recommendations',
+    requireAuth,
+    wrap(async (req, res) =>
+      ok(res, await findRequestRecommendations(req.params.id, req.actor!.id)),
+    ),
+  );
+  router.patch(
+    '/requests/:id/accept-recommendation',
+    requireAuth,
+    wrap(async (req, res) => {
+      const { noteId } = z.object({ noteId: z.string() }).strict().parse(req.body);
+      ok(
+        res,
+        await acceptRequestRecommendation(req.params.id, req.actor!.id, noteId),
+        'Request resolved with existing notes.',
+      );
     }),
   );
   router.patch(

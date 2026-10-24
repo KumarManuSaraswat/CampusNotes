@@ -12,6 +12,17 @@ const schema = new Schema(
     fulfilledBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     fulfilledNote: { type: Schema.Types.ObjectId, ref: 'Note', default: null },
     fulfilledAt: { type: Date, default: null },
+    acceptedRecommendationBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    recommendations: {
+      type: [
+        { noteId: { type: Schema.Types.ObjectId, ref: 'Note' }, reason: String, evidence: String },
+      ],
+      default: [],
+    },
+    recommendationsCheckedAt: { type: Date, default: null },
+    recommendationAttemptId: { type: String, default: null },
+    recommendationExpiresAt: { type: Date, default: null },
+    recommendationAttemptAt: { type: Date, default: null },
   },
   { timestamps: true },
 );
