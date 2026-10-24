@@ -15,11 +15,13 @@ async function main() {
     CLOUDINARY_API_KEY: 'preview',
     CLOUDINARY_API_SECRET: 'preview',
     AI_ENABLED: 'false',
+    REQUEST_RECOMMENDATIONS_ENABLED: 'false',
   });
   await mongoose.connect(process.env.MONGODB_URI!);
   const { User } = await import('../server/src/models/User.js');
   const { Note } = await import('../server/src/models/Note.js');
   const { Bookmark } = await import('../server/src/models/Bookmark.js');
+  const { NoteRequest } = await import('../server/src/models/NoteRequest.js');
   const { storage } = await import('../server/src/services/storage/cloudinary.js');
   const { default: app } = await import('../server/src/app.js');
   const student = await User.create({
@@ -79,6 +81,24 @@ async function main() {
       metadataSource: 'manual',
     });
     if (i === 1) await Bookmark.create({ user: student._id, note: note._id });
+    if (i === 0)
+      await NoteRequest.create({
+        createdBy: student._id,
+        title: 'Looking for notes on stacks and queues',
+        subject: 'Computer Science',
+        normalizedKey: 'demo-stacks-and-queues',
+        description:
+          'I need clear definitions and examples to prepare for our data structures quiz.',
+        recommendationsCheckedAt: new Date(),
+        recommendations: [
+          {
+            noteId: note._id,
+            reason:
+              'Demo suggestion: this guide includes definitions and examples for stacks and queues.',
+            evidence: 'Definitions, examples, and the little details that help it click.',
+          },
+        ],
+      });
   }
   storage.read = async (file) => {
     const bytes = documents.get(file.storagePublicId);

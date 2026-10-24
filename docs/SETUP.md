@@ -42,3 +42,11 @@ For the free tier, classification defaults to a 12,000-character source limit; l
 If analysis fails, expand its status: `PROVIDER_AUTH` means check the Groq key/project access; `MODEL_UNAVAILABLE` means check model access or the configured ID; `RATE_LIMITED` means wait for the applicable quota to reset; `PROVIDER_UNAVAILABLE` means a network/provider failure; `PAGE_LIMIT` means split a scanned PDF into files of at most 3 pages. Groq quota errors and timeouts are not immediately retried automatically. Completed group extractions survive retries.
 
 Gemini remains available with `AI_PROVIDER=gemini`, `GEMINI_API_KEY`, and `GEMINI_MODEL`. Existing installations without `AI_PROVIDER` retain Gemini for compatibility. There is no automatic fallback to another provider or key.
+
+## Gemini suggestions for community requests
+
+Keep `AI_PROVIDER=groq` for document processing. Community-request suggestions independently use the existing server-only `GEMINI_API_KEY` and `GEMINI_MODEL`. No new key is required if both are already configured in Render. An optional `GEMINI_RECOMMENDATION_MODEL` overrides the model for this feature alone. Set `REQUEST_RECOMMENDATIONS_ENABLED=false` to disable new checks (the default is `true`). Existing saved suggestions can still be accepted when new checks are unavailable.
+
+After merging and redeploying, post a request matching an approved public note from another student. The request should stay open and display up to three suggestions with preview links. Select **Accept & resolve** to move it to Fulfilled and retain a link to the accepted note. Existing open requests also have **Find existing notes**. Repeat with a request that has no match and verify it stays open. Private drafts and rejected notes must not be suggested.
+
+Gemini's own quota still applies. An exhausted or invalid Gemini key produces an explanatory message and leaves the request open for community responses. No automatic Groq fallback or automatic acceptance occurs. The tests use mocked model responses; a live Gemini check requires the deployed key. `scripts/preview-demo.ts` includes a clearly labeled synthetic cached suggestion for local UI testing without live provider calls.

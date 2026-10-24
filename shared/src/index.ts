@@ -100,6 +100,19 @@ export interface ApiResponse<T> {
   data: T;
   message: string;
 }
+export interface RequestNoteRecommendation {
+  noteId: string;
+  title: string;
+  subject: string;
+  description: string;
+  reason: string;
+  evidence: string;
+}
+export interface RequestRecommendationsResult {
+  requestId: string;
+  recommendations: RequestNoteRecommendation[];
+  checkedAt: string;
+}
 export interface ApiError {
   success: false;
   error: { code: string; message: string };
