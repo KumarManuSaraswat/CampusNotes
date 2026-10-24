@@ -1,22 +1,26 @@
 export type AnalysisStage = 'storage' | 'document' | 'vision' | 'classification';
 
 const providerMessages: Record<string, string> = {
+  PAGE_LIMIT: 'Groq can read up to 3 scanned PDF pages per upload. Split this PDF into smaller files.',
+  PARSER_FAILED: 'This PDF could not be rendered for image reading. Try exporting it again.',
+  PASSWORD_REQUIRED: 'This PDF requires a password. Upload an unlocked copy.',
+  FILE_TOO_LARGE: 'This document exceeds the image-reading size limit.',
   CONFIG_MISSING:
-    'The server is missing its Gemini configuration. Ask the administrator to check the API key and model.',
+    'The server is missing its AI provider configuration. Ask the administrator to check the API key and model.',
   CONFIG_INVALID:
     'The server has invalid analysis settings. Ask the administrator to check the configuration.',
-  SDK_MISSING: 'The server could not load Gemini. Ask the administrator to rebuild the backend.',
+  SDK_MISSING: 'The server could not load the AI provider SDK. Ask the administrator to rebuild the backend.',
   PROVIDER_AUTH:
-    'Gemini refused access. Ask the administrator to check the API key and project permissions.',
+    'The AI provider refused access. Ask the administrator to check the API key and project permissions.',
   MODEL_UNAVAILABLE:
-    'The configured Gemini model is unavailable to this project. Ask the administrator to check GEMINI_MODEL.',
+    'The configured AI provider model is unavailable to this project. Ask the administrator to check the selected provider model.',
   RATE_LIMITED:
-    'Gemini has reached a rate or quota limit. Check the project quota before retrying.',
-  TIMEOUT: 'Gemini took too long to respond. Please retry shortly.',
-  PROVIDER_UNAVAILABLE: 'Gemini is temporarily unavailable. Please retry shortly.',
-  PROVIDER_BLOCKED: 'Gemini could not process this content. You can request a human review.',
+    'The AI provider has reached a rate or quota limit. Check the project quota before retrying.',
+  TIMEOUT: 'The AI provider took too long to respond. Please retry shortly.',
+  PROVIDER_UNAVAILABLE: 'The AI provider is temporarily unavailable. Please retry shortly.',
+  PROVIDER_BLOCKED: 'The AI provider could not process this content. You can request a human review.',
   MALFORMED_RESPONSE:
-    'Gemini returned an incomplete or invalid result. Retry or request a human review.',
+    'The AI provider returned an incomplete or invalid result. Retry or request a human review.',
 };
 const documentMessages: Record<string, string> = {
   PASSWORD_REQUIRED: 'This PDF requires a password. Upload an unlocked copy.',

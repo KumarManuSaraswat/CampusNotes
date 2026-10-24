@@ -19,7 +19,7 @@ describe('safe analysis diagnostics', () => {
     expect(analysisFailure('document', { code: 'TIMEOUT' }).message).toContain(
       'Reading the document',
     );
-    expect(analysisFailure('vision', { code: 'TIMEOUT' }).message).toContain('Gemini');
+    expect(analysisFailure('vision', { code: 'TIMEOUT' }).message).toContain('AI provider');
   });
   it.each(['secret-key', 'toString', '__proto__'])('does not echo unknown code %s', (code) => {
     expect(analysisFailure('vision', { code, message: 'private original' }).code).toBe(

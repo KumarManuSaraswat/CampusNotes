@@ -1,6 +1,6 @@
 # CampusNotes
 
-A MERN note sharing app for students. This repository implements the complete non-AI foundation: accounts, original PDF and image uploads, discovery, voting, reputation, requests, reporting, and moderation. AI integration points are documented but disabled.
+A MERN note sharing app for students with accounts, original PDF and image uploads, discovery, voting, reputation, requests, reporting, and moderation. Optional AI study screening, transcription, metadata, summaries, and page ordering support Groq or Gemini. See [Groq setup](docs/SETUP.md#switch-ai-to-groq-render-dashboard-no-paid-shell-needed) to enable the backend with your own key.
 
 ## Quick start
 

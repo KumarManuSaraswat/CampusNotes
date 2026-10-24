@@ -1,3 +1,5 @@
+import { providerConfig } from '../providerConfig.js';
+import { groqCompletion, GroqError } from '../groqClient.js';
 import { STUDY_GATE_SYSTEM_INSTRUCTION } from './studyGatePrompt.js';
 import {
   createGeminiStudyAssessmentSchema,
@@ -27,17 +29,18 @@ export type StudyGateErrorCode =
 
 const safeMessages: Record<StudyGateErrorCode, string> = {
   INVALID_INPUT: 'Extracted document text is invalid.',
-  CONFIG_MISSING: 'Study classification is not configured. Set GEMINI_API_KEY and GEMINI_MODEL.',
+  CONFIG_MISSING:
+    'Study classification is not configured. Check the selected provider key and model.',
   CONFIG_INVALID: 'Study classification configuration contains an invalid limit.',
   SDK_MISSING: 'The Gemini SDK is not installed in the server workspace.',
   TIMEOUT: 'Study classification timed out. Please retry.',
-  PROVIDER_AUTH: 'Gemini rejected the configured credentials.',
-  MODEL_UNAVAILABLE: 'The configured Gemini model is unavailable. Check GEMINI_MODEL.',
-  RATE_LIMITED: 'Gemini is temporarily rate limiting requests. Please retry shortly.',
-  PROVIDER_UNAVAILABLE: 'Gemini is temporarily unavailable. Please retry shortly.',
-  PROVIDER_BLOCKED: 'Gemini did not return a classification for this document.',
-  PROVIDER_ERROR: 'Gemini could not classify this document.',
-  MALFORMED_RESPONSE: 'Gemini returned a classification in an unexpected format.',
+  PROVIDER_AUTH: 'The AI provider rejected the configured credentials.',
+  MODEL_UNAVAILABLE: 'The configured AI model is unavailable. Check the selected provider model.',
+  RATE_LIMITED: 'The AI provider is temporarily rate limiting requests. Please retry shortly.',
+  PROVIDER_UNAVAILABLE: 'The AI provider is temporarily unavailable. Please retry shortly.',
+  PROVIDER_BLOCKED: 'The AI provider did not return a classification for this document.',
+  PROVIDER_ERROR: 'The AI provider could not classify this document.',
+  MALFORMED_RESPONSE: 'The AI provider returned a classification in an unexpected format.',
 };
 
 export class StudyGateError extends Error {
@@ -149,6 +152,7 @@ export function createGeminiStudyGateClient(
 }
 
 interface StudyGateConfiguration {
+  provider: string;
   model: string;
   apiKey: string | undefined;
   timeoutMs: number;
@@ -172,14 +176,27 @@ function getConfiguration(
   env: NodeJS.ProcessEnv,
   options: StudyGateOptions,
 ): StudyGateConfiguration {
-  const apiKey = env.GEMINI_API_KEY?.trim() || undefined;
-  const model = env.GEMINI_MODEL?.trim() || (options.client ? 'injected-model' : '');
+  let selected;
+  try {
+    selected = providerConfig(env);
+  } catch {
+    throw new StudyGateError('CONFIG_INVALID');
+  }
+  const { apiKey, provider } = selected;
+  const model = selected.model || (options.client ? 'injected-model' : '');
   if (!model || (!apiKey && !options.client)) throw new StudyGateError('CONFIG_MISSING');
 
   const timeoutMs =
-    options.timeoutMs ?? numericSetting(env.STUDY_GATE_TIMEOUT_MS, 60_000, 1000, 120_000);
+    options.timeoutMs ??
+    numericSetting(env.STUDY_GATE_TIMEOUT_MS, provider === 'groq' ? 30_000 : 60_000, 1000, 120_000);
   const maxInputChars =
-    options.maxInputChars ?? numericSetting(env.STUDY_GATE_MAX_INPUT_CHARS, 100_000, 1000, 500_000);
+    options.maxInputChars ??
+    numericSetting(
+      env.STUDY_GATE_MAX_INPUT_CHARS,
+      provider === 'groq' ? 12_000 : 100_000,
+      1000,
+      500_000,
+    );
   if (
     !Number.isSafeInteger(timeoutMs) ||
     timeoutMs < 1 ||
@@ -191,11 +208,15 @@ function getConfiguration(
     throw new StudyGateError('CONFIG_INVALID');
   }
 
-  return { model, apiKey, timeoutMs, maxInputChars };
+  return { provider, model, apiKey, timeoutMs, maxInputChars };
 }
 
 function classifyProviderError(error: unknown): StudyGateError {
   if (error instanceof StudyGateError) return error;
+  if (error instanceof GroqError)
+    return new StudyGateError(error.code as StudyGateErrorCode, {
+      retryable: ['RATE_LIMITED', 'TIMEOUT', 'PROVIDER_UNAVAILABLE'].includes(error.code),
+    });
   const value = (error && typeof error === 'object' ? error : {}) as Record<string, unknown>;
   const cause = (value.cause && typeof value.cause === 'object' ? value.cause : {}) as Record<
     string,
@@ -358,7 +379,20 @@ export async function assessStudyContent(
 
   const client =
     options.client ??
-    createGeminiStudyGateClient({ apiKey: config.apiKey!, timeoutMs: config.timeoutMs });
+    (config.provider === 'groq'
+      ? {
+          generate: (request: StudyGateModelRequest) =>
+            groqCompletion(config.apiKey!, {
+              ...request,
+              maxOutputTokens: 2048,
+              schema: createGeminiStudyAssessmentSchema({
+                OBJECT: 'object',
+                STRING: 'string',
+                ARRAY: 'array',
+              }),
+            }),
+        }
+      : createGeminiStudyGateClient({ apiKey: config.apiKey!, timeoutMs: config.timeoutMs }));
   const request: StudyGateModelRequest = {
     model: config.model,
     // JSON encoding makes the source boundary explicit and escapes prompt-like document text.
@@ -378,7 +412,12 @@ export async function assessStudyContent(
       lastError = classifyProviderError(error);
       // A timed-out request may still be running upstream, so retry only explicit transient
       // provider failures that are safe to repeat.
-      if (!lastError.retryable || lastError.code === 'TIMEOUT' || attempt === 1) {
+      if (
+        !lastError.retryable ||
+        lastError.code === 'TIMEOUT' ||
+        (config.provider === 'groq' && lastError.code === 'RATE_LIMITED') ||
+        attempt === 1
+      ) {
         break;
       }
       const delay = options.retryDelayMs ?? 200;
