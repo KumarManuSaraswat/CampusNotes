@@ -1,3 +1,6 @@
+import { providerConfig } from '../providerConfig.js';
+import { GroqError } from '../groqClient.js';
+import { createGroqVisionClient } from './groqVisionClient.js';
 import { fileTypeFromBuffer } from 'file-type';
 import type {
   DocumentReference,
@@ -21,6 +24,9 @@ export interface VisionTextResult {
 }
 
 export type VisionErrorCode =
+  | 'PAGE_LIMIT'
+  | 'PARSER_FAILED'
+  | 'PASSWORD_REQUIRED'
   | 'INVALID_INPUT'
   | 'UNSUPPORTED_MIME'
   | 'MIME_MISMATCH'
@@ -40,23 +46,28 @@ export type VisionErrorCode =
   | 'MALFORMED_RESPONSE';
 
 const safeMessages: Record<VisionErrorCode, string> = {
+  PAGE_LIMIT:
+    'Groq can read up to 3 scanned PDF pages per upload. Split this PDF into smaller files.',
+  PARSER_FAILED: 'The PDF could not be rendered for image reading. Try exporting it again.',
+  PASSWORD_REQUIRED: 'This PDF requires a password. Upload an unlocked copy.',
   INVALID_INPUT: 'A non-empty document buffer is required.',
   UNSUPPORTED_MIME: 'Vision transcription supports JPEG, PNG, and PDF files.',
   MIME_MISMATCH: 'The document content does not match its declared file type.',
   MALFORMED_DOCUMENT: 'The document appears to be damaged or incomplete.',
   FILE_TOO_LARGE: 'The document exceeds the configured vision processing limit.',
-  CONFIG_MISSING: 'Gemini vision is not configured. Set GEMINI_API_KEY and GEMINI_MODEL.',
-  CONFIG_INVALID: 'Gemini vision configuration contains an invalid processing limit.',
+  CONFIG_MISSING:
+    'The AI provider vision is not configured. Check the selected provider key and model.',
+  CONFIG_INVALID: 'The AI provider vision configuration contains an invalid processing limit.',
   SDK_MISSING: 'The Gemini SDK is not installed. Install @google/genai in the server workspace.',
   SOURCE_UNAVAILABLE: 'The source document could not be loaded for transcription.',
-  MODEL_UNAVAILABLE: 'The configured Gemini model is unavailable. Check GEMINI_MODEL.',
-  PROVIDER_AUTH: 'Gemini rejected the configured credentials.',
-  RATE_LIMITED: 'Gemini is temporarily rate limiting requests. Please retry shortly.',
-  PROVIDER_UNAVAILABLE: 'Gemini is temporarily unavailable. Please retry shortly.',
-  TIMEOUT: 'Gemini vision timed out. Please retry the document.',
-  PROVIDER_BLOCKED: 'Gemini did not return a transcription for this document.',
-  PROVIDER_ERROR: 'Gemini could not process this document.',
-  MALFORMED_RESPONSE: 'Gemini returned an unexpected response.',
+  MODEL_UNAVAILABLE: 'The configured AI model is unavailable. Check the selected provider model.',
+  PROVIDER_AUTH: 'The AI provider rejected the configured credentials.',
+  RATE_LIMITED: 'The AI provider is temporarily rate limiting requests. Please retry shortly.',
+  PROVIDER_UNAVAILABLE: 'The AI provider is temporarily unavailable. Please retry shortly.',
+  TIMEOUT: 'The AI provider vision timed out. Please retry the document.',
+  PROVIDER_BLOCKED: 'The AI provider did not return a transcription for this document.',
+  PROVIDER_ERROR: 'The AI provider could not process this document.',
+  MALFORMED_RESPONSE: 'The AI provider returned an unexpected response.',
 };
 
 export class VisionError extends Error {
@@ -113,8 +124,13 @@ function getNumericSetting(
 }
 
 function getConfiguration(env: NodeJS.ProcessEnv, options: VisionAnalyzerOptions) {
-  const apiKey = env.GEMINI_API_KEY?.trim();
-  const model = env.GEMINI_MODEL?.trim();
+  let selected;
+  try {
+    selected = providerConfig(env, true);
+  } catch {
+    throw new VisionError('CONFIG_INVALID');
+  }
+  const { apiKey, model, provider } = selected;
   if (!apiKey || !model) throw new VisionError('CONFIG_MISSING');
   const maxBytes =
     options.maxBytes ??
@@ -133,7 +149,7 @@ function getConfiguration(env: NodeJS.ProcessEnv, options: VisionAnalyzerOptions
     timeoutMs > 150_000
   )
     throw new VisionError('CONFIG_INVALID');
-  return { apiKey, model, maxBytes, timeoutMs };
+  return { apiKey, model, provider, maxBytes, timeoutMs };
 }
 
 function validatePdfMarkers(bytes: Buffer) {
@@ -156,6 +172,10 @@ async function validateInput(input: VisionInput, maxBytes: number) {
 
 function classifyProviderError(error: unknown): VisionError {
   if (error instanceof VisionError) return error;
+  if (error instanceof GroqError)
+    return new VisionError(error.code as VisionErrorCode, {
+      retryable: ['RATE_LIMITED', 'TIMEOUT', 'PROVIDER_UNAVAILABLE'].includes(error.code),
+    });
   const value = (error && typeof error === 'object' ? error : {}) as Record<string, unknown>;
   const cause = (value.cause && typeof value.cause === 'object' ? value.cause : {}) as Record<
     string,
@@ -253,7 +273,9 @@ export async function extractVisualText(
   await validateInput(input, config.maxBytes);
   const client =
     options.client ??
-    createGeminiVisionClient({ apiKey: config.apiKey, timeoutMs: config.timeoutMs });
+    (config.provider === 'groq'
+      ? createGroqVisionClient({ apiKey: config.apiKey })
+      : createGeminiVisionClient({ apiKey: config.apiKey, timeoutMs: config.timeoutMs }));
   const request: GeminiVisionRequest = {
     model: config.model,
     mimeType: input.mimeType,
@@ -271,7 +293,12 @@ export async function extractVisualText(
       break;
     } catch (error) {
       lastError = classifyProviderError(error);
-      if (!lastError.retryable || attempt === 1) break;
+      if (
+        !lastError.retryable ||
+        (config.provider === 'groq' && ['RATE_LIMITED', 'TIMEOUT'].includes(lastError.code)) ||
+        attempt === 1
+      )
+        break;
       const delay = options.retryDelayMs ?? RETRY_DELAY_MS;
       if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     }

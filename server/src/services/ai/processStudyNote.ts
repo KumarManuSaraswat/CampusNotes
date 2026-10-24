@@ -1,3 +1,4 @@
+import { providerConfig } from './providerConfig.js';
 import { randomUUID } from 'node:crypto';
 import mongoose from 'mongoose';
 import type { StudyGateResult } from '@campusnotes/shared';
@@ -18,7 +19,8 @@ import { analysisFailure, type AnalysisStage } from './analysisFailure.js';
 const activeActors = new Set<string>();
 export function aiAvailable() {
   const env = readEnv();
-  return env.AI_ENABLED === 'true' && !!env.GEMINI_API_KEY?.trim() && !!env.GEMINI_MODEL?.trim();
+  const config = providerConfig(env);
+  return env.AI_ENABLED === 'true' && !!config.apiKey && !!config.model;
 }
 export function gateDto(note: any): StudyGateResult {
   return {
@@ -143,9 +145,10 @@ export async function processStudyNote(noteId: string, actorId: string) {
               reason: 'Some content could not be read reliably. A human review is needed.',
               warnings: extracted.warnings.slice(0, 6).map((x) => x.slice(0, 240)),
             }
-          : await assessStudyContent(
-              { extractedText: extracted.text ?? '', originalFilename: note.originalFilename },
-            ),
+          : await assessStudyContent({
+              extractedText: extracted.text ?? '',
+              originalFilename: note.originalFilename,
+            }),
       );
       const gate = { academic: 'approved', non_academic: 'rejected', review: 'needs_review' }[
         assessment.decision
@@ -263,11 +266,14 @@ async function processGroupedStudyNote(noteId: string, actorId: string) {
       message,
     });
     const save = async (update: Record<string, unknown>, options: Record<string, unknown> = {}) => {
-      const saved = await Note.findOneAndUpdate(guard, update, { new: true, ...options });
+      const saved = await Note.findOneAndUpdate(guard, update, { new: true, ...options }).select(
+        '+processingError',
+      );
       if (!saved)
         throw new HttpError(409, 'STALE_ATTEMPT', 'This analysis was superseded. Refresh.');
       return gateDto(saved);
     };
+    let stage: AnalysisStage = 'storage';
     try {
       const asset = note.assets!.find((item) => item.extractionStatus !== 'completed');
       if (asset) {
@@ -280,10 +286,12 @@ async function processGroupedStudyNote(noteId: string, actorId: string) {
           asset.mimeType,
         );
         const mimeType = asset.mimeType as DocumentMimeType;
+        stage = 'document';
         const prepared = await prepareDocument(
           { bytes, mimeType },
           { maxPages: 40, timeoutMs: 10_000 },
         );
+        stage = 'vision';
         const usedVision = prepared.status === 'vision_required';
         const extracted = usedVision
           ? await extractVisualText({ bytes, mimeType }, { timeoutMs: 15_000 })
@@ -316,6 +324,7 @@ async function processGroupedStudyNote(noteId: string, actorId: string) {
           (item) => `[File ${item.uploadIndex + 1}, ${item.id}]\n${item.extractedText || ''}`,
         )
         .join('\n\n');
+      stage = 'classification';
       if (note.studyGateStatus !== 'approved') {
         const warnings = note.assets!.flatMap((item) => item.extractionWarnings);
         const assessment = studyAssessmentSchema.parse(
@@ -402,7 +411,7 @@ async function processGroupedStudyNote(noteId: string, actorId: string) {
           processingStatus: 'failed',
           studyGateStatus: 'failed',
           processingStage: 'document_extraction',
-          processingError: 'Analysis could not finish. Your originals are retained.',
+          processingError: analysisFailure(stage, error).message,
           studyGateAttemptId: null,
           studyGateExpiresAt: null,
           lastProcessedAt: new Date(),

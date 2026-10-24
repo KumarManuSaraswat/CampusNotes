@@ -172,20 +172,18 @@ beforeEach(async () => {
   });
   mockVision.mockReset().mockResolvedValue({ text: 'A lesson about eigenvectors.', warnings: [] });
   mockAssess.mockReset().mockResolvedValue(academic);
-  mockSuggestMetadata
-    .mockReset()
-    .mockResolvedValue({
-      title: 'Linear algebra notes',
-      category: 'Mathematics',
-      subject: 'Linear algebra',
-      topics: ['eigenvectors'],
-      keywords: ['eigenvectors'],
-      documentType: 'lecture notes',
-      instructor: null,
-      lectureDate: null,
-      description: 'A lesson about eigenvectors.',
-      uncertaintyNotes: [],
-    });
+  mockSuggestMetadata.mockReset().mockResolvedValue({
+    title: 'Linear algebra notes',
+    category: 'Mathematics',
+    subject: 'Linear algebra',
+    topics: ['eigenvectors'],
+    keywords: ['eigenvectors'],
+    documentType: 'lecture notes',
+    instructor: null,
+    lectureDate: null,
+    description: 'A lesson about eigenvectors.',
+    uncertaintyNotes: [],
+  });
   mockSuggestOrder.mockReset().mockImplementation(async (assets: Array<{ id: string }>) => ({
     orderedAssetIds: assets.map((asset) => asset.id).reverse(),
     reasons: [],
@@ -810,6 +808,41 @@ describe('Grouped smart notes', () => {
     expect(failed.status).toBe(503);
     expect(await Note.countDocuments({ uploadedBy: owner._id })).toBe(0);
     expect(mockStorageRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it('enables Groq without Gemini and persists safe, owner-only grouped-upload diagnostics', async () => {
+    const originalEnv = { ...process.env };
+    try {
+      process.env.AI_PROVIDER = 'groq';
+      process.env.GROQ_API_KEY = 'test-only-groq-key';
+      delete process.env.GEMINI_API_KEY;
+      delete process.env.GEMINI_MODEL;
+      const owner = await actor();
+      expect((await hit('get', '/ai/capabilities', owner)).body.data.enabled).toBe(true);
+      const upload = await hit('post', '/notes', owner).attach('files', png, 'notes.png');
+      const noteId = upload.body.data[0].id;
+      mockPrepare.mockResolvedValueOnce({ status: 'vision_required', text: null, warnings: [] });
+      mockVision.mockRejectedValueOnce({
+        code: 'RATE_LIMITED',
+        message: 'secret key and private source',
+      });
+      const failed = (await hit('post', `/notes/${noteId}/ai-process`, owner)).body.data;
+      expect(failed.studyGateStatus).toBe('failed');
+      expect(failed.processingError).toContain('[vision/RATE_LIMITED]');
+      expect(failed.processingError).not.toMatch(/secret|private source|Gemini/);
+      expect(
+        (await hit('get', `/notes/${noteId}/ai-status`, owner)).body.data.processingError,
+      ).toBe(failed.processingError);
+      expect((await hit('get', `/notes/${noteId}/ai-status`, await actor())).status).toBe(403);
+      expect(mockAssess).not.toHaveBeenCalled();
+      delete process.env.GROQ_API_KEY;
+      expect((await hit('get', '/ai/capabilities', owner)).body.data.enabled).toBe(false);
+    } finally {
+      for (const key of ['AI_PROVIDER', 'GROQ_API_KEY', 'GEMINI_API_KEY', 'GEMINI_MODEL']) {
+        if (originalEnv[key] === undefined) delete process.env[key];
+        else process.env[key] = originalEnv[key];
+      }
+    }
   });
 
   it('retries failed metadata without repeating completed document extraction or screening', async () => {
